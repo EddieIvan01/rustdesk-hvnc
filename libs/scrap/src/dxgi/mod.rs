@@ -1,13 +1,14 @@
 use std::{io, mem, ptr, slice};
 pub mod gdi;
 pub use gdi::CapturerGDI;
-pub mod mag;
+// pub mod mag;
 
 use winapi::{
     shared::{
-        dxgi::*,
-        dxgi1_2::*,
-        dxgitype::*,
+        // dxgi::*,
+        // dxgi1_2::*,
+        dxgi::DXGI_OUTPUT_DESC,
+        dxgitype::DXGI_MODE_ROTATION,
         minwindef::{DWORD, FALSE, TRUE, UINT},
         ntdef::LONG,
         windef::HMONITOR,
@@ -20,33 +21,33 @@ use winapi::{
     },
 };
 
-use crate::RotationMode::*;
-
-pub struct ComPtr<T>(*mut T);
-impl<T> ComPtr<T> {
-    fn is_null(&self) -> bool {
-        self.0.is_null()
-    }
-}
-impl<T> Drop for ComPtr<T> {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.is_null() {
-                (*(self.0 as *mut IUnknown)).Release();
-            }
-        }
-    }
-}
+// pub struct ComPtr<T>(*mut T);
+// impl<T> ComPtr<T> {
+//     fn is_null(&self) -> bool {
+//         self.0.is_null()
+//     }
+// }
+// impl<T> Drop for ComPtr<T> {
+//     fn drop(&mut self) {
+//         unsafe {
+//             if !self.is_null() {
+//                 (*(self.0 as *mut IUnknown)).Release();
+//             }
+//         }
+//     }
+// }
 
 pub struct Capturer {
-    device: ComPtr<ID3D11Device>,
+    // device: ComPtr<ID3D11Device>,
     display: Display,
-    context: ComPtr<ID3D11DeviceContext>,
-    duplication: ComPtr<IDXGIOutputDuplication>,
+    // context: ComPtr<ID3D11DeviceContext>,
+    // duplication: ComPtr<IDXGIOutputDuplication>,
     fastlane: bool,
-    surface: ComPtr<IDXGISurface>,
+    // surface: ComPtr<IDXGISurface>,
     width: usize,
     height: usize,
+    use_yuv: bool,
+    yuv: Vec<u8>,
     rotated: Vec<u8>,
     gdi_capturer: Option<CapturerGDI>,
     gdi_buffer: Vec<u8>,
@@ -54,105 +55,111 @@ pub struct Capturer {
 }
 
 impl Capturer {
-    pub fn new(display: Display) -> io::Result<Capturer> {
-        let mut device = ptr::null_mut();
-        let mut context = ptr::null_mut();
-        let mut duplication = ptr::null_mut();
-        #[allow(invalid_value)]
-        let mut desc = unsafe { mem::MaybeUninit::uninit().assume_init() };
+    pub fn new(display: Display, use_yuv: bool) -> io::Result<Capturer> {
+        // let mut device = ptr::null_mut();
+        // let mut context = ptr::null_mut();
+        // let mut duplication = ptr::null_mut();
+        // #[allow(invalid_value)]
+        // let mut desc = unsafe { mem::MaybeUninit::uninit().assume_init() };
         let mut gdi_capturer = None;
 
-        let mut res = if display.gdi {
-            wrap_hresult(1)
-        } else {
-            wrap_hresult(unsafe {
-                D3D11CreateDevice(
-                    display.adapter.0 as *mut _,
-                    D3D_DRIVER_TYPE_UNKNOWN,
-                    ptr::null_mut(), // No software rasterizer.
-                    0,               // No device flags.
-                    ptr::null_mut(), // Feature levels.
-                    0,               // Feature levels' length.
-                    D3D11_SDK_VERSION,
-                    &mut device,
-                    ptr::null_mut(),
-                    &mut context,
-                )
-            })
-        };
-        let device = ComPtr(device);
-        let context = ComPtr(context);
+        let mut res = wrap_hresult(1);
+        // let mut res = if display.gdi {
+        //     wrap_hresult(1)
+        // } else {
+        //     wrap_hresult(unsafe {
+        //         D3D11CreateDevice(
+        //             display.adapter.0 as *mut _,
+        //             D3D_DRIVER_TYPE_UNKNOWN,
+        //             ptr::null_mut(), // No software rasterizer.
+        //             0,               // No device flags.
+        //             ptr::null_mut(), // Feature levels.
+        //             0,               // Feature levels' length.
+        //             D3D11_SDK_VERSION,
+        //             &mut device,
+        //             ptr::null_mut(),
+        //             &mut context,
+        //         )
+        //     })
+        // };
+        // let device = ComPtr(device);
+        // let context = ComPtr(context);
 
-        if res.is_err() {
+        // if res.is_err() {
             gdi_capturer = display.create_gdi();
-            println!("Fallback to GDI");
             if gdi_capturer.is_some() {
                 res = Ok(());
             }
-        } else {
-            res = wrap_hresult(unsafe {
-                let hres = (*display.inner.0).DuplicateOutput(device.0 as *mut _, &mut duplication);
-                if hres != S_OK {
-                    gdi_capturer = display.create_gdi();
-                    println!("Fallback to GDI");
-                    if gdi_capturer.is_some() {
-                        S_OK
-                    } else {
-                        hres
-                    }
-                } else {
-                    hres
-                }
-                // NVFBC(NVIDIA Capture SDK) which xpra used already deprecated, https://developer.nvidia.com/capture-sdk
+        // } else {
+        //     res = wrap_hresult(unsafe {
+        //         let hres = (*display.inner.0).DuplicateOutput(device.0 as *mut _, &mut duplication);
+        //         if hres != S_OK {
+        //             gdi_capturer = display.create_gdi();
+        //             println!("Fallback to GDI");
+        //             if gdi_capturer.is_some() {
+        //                 S_OK
+        //             } else {
+        //                 hres
+        //             }
+        //         } else {
+        //             hres
+        //         }
+        //         // NVFBC(NVIDIA Capture SDK) which xpra used already deprecated, https://developer.nvidia.com/capture-sdk
 
-                // also try high version DXGI for better performance, e.g.
-                // https://docs.microsoft.com/zh-cn/windows/win32/direct3ddxgi/dxgi-1-2-improvements
-                // dxgi-1-6 may too high, only support win10 (2018)
-                // https://docs.microsoft.com/zh-cn/windows/win32/api/dxgiformat/ne-dxgiformat-dxgi_format
-                // DXGI_FORMAT_420_OPAQUE
-                // IDXGIOutputDuplication::GetFrameDirtyRects and IDXGIOutputDuplication::GetFrameMoveRects
-                // can help us update screen incrementally
+        //         // also try high version DXGI for better performance, e.g.
+        //         // https://docs.microsoft.com/zh-cn/windows/win32/direct3ddxgi/dxgi-1-2-improvements
+        //         // dxgi-1-6 may too high, only support win10 (2018)
+        //         // https://docs.microsoft.com/zh-cn/windows/win32/api/dxgiformat/ne-dxgiformat-dxgi_format
+        //         // DXGI_FORMAT_420_OPAQUE
+        //         // IDXGIOutputDuplication::GetFrameDirtyRects and IDXGIOutputDuplication::GetFrameMoveRects
+        //         // can help us update screen incrementally
 
-                /* // not supported on my PC, try in the future
-                let format : Vec<DXGI_FORMAT> = vec![DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_420_OPAQUE];
-                (*display.inner).DuplicateOutput1(
-                    device as *mut _,
-                    0 as UINT,
-                    2 as UINT,
-                    format.as_ptr(),
-                    &mut duplication
-                )
-                */
+        //         /* // not supported on my PC, try in the future
+        //         let format : Vec<DXGI_FORMAT> = vec![DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_420_OPAQUE];
+        //         (*display.inner).DuplicateOutput1(
+        //             device as *mut _,
+        //             0 as UINT,
+        //             2 as UINT,
+        //             format.as_ptr(),
+        //             &mut duplication
+        //         )
+        //         */
 
-                // if above not work, I think below should not work either, try later
-                // https://developer.nvidia.com/capture-sdk deprecated
-                // examples using directx + nvideo sdk for GPU-accelerated video encoding/decoding
-                // https://github.com/NVIDIA/video-sdk-samples
-            });
-        }
+        //         // if above not work, I think below should not work either, try later
+        //         // https://developer.nvidia.com/capture-sdk deprecated
+        //         // examples using directx + nvideo sdk for GPU-accelerated video encoding/decoding
+        //         // https://github.com/NVIDIA/video-sdk-samples
+        //     });
+        // }
 
         res?;
 
-        if !duplication.is_null() {
-            unsafe {
-                (*duplication).GetDesc(&mut desc);
-            }
-        }
+        // if !duplication.is_null() {
+        //     unsafe {
+        //         (*duplication).GetDesc(&mut desc);
+        //     }
+        // }
 
         Ok(Capturer {
-            device,
-            context,
-            duplication: ComPtr(duplication),
-            fastlane: desc.DesktopImageInSystemMemory == TRUE,
-            surface: ComPtr(ptr::null_mut()),
+            // device,
+            // context,
+            // duplication: ComPtr(duplication),
+            fastlane: false,//desc.DesktopImageInSystemMemory == TRUE,
+            // surface: ComPtr(ptr::null_mut()),
             width: display.width() as usize,
             height: display.height() as usize,
             display,
+            use_yuv,
+            yuv: Vec::new(),
             rotated: Vec::new(),
             gdi_capturer,
             gdi_buffer: Vec::new(),
             saved_raw_data: Vec::new(),
         })
+    }
+
+    pub fn set_use_yuv(&mut self, use_yuv: bool) {
+        self.use_yuv = use_yuv;
     }
 
     pub fn is_gdi(&self) -> bool {
@@ -169,75 +176,75 @@ impl Capturer {
         self.gdi_capturer.take();
     }
 
-    unsafe fn load_frame(&mut self, timeout: UINT) -> io::Result<(*const u8, i32)> {
-        let mut frame = ptr::null_mut();
-        #[allow(invalid_value)]
-        let mut info = mem::MaybeUninit::uninit().assume_init();
+    // unsafe fn load_frame(&mut self, timeout: UINT) -> io::Result<(*const u8, i32)> {
+    //     let mut frame = ptr::null_mut();
+    //     #[allow(invalid_value)]
+    //     let mut info = mem::MaybeUninit::uninit().assume_init();
 
-        wrap_hresult((*self.duplication.0).AcquireNextFrame(timeout, &mut info, &mut frame))?;
-        let frame = ComPtr(frame);
+    //     wrap_hresult((*self.duplication.0).AcquireNextFrame(timeout, &mut info, &mut frame))?;
+    //     let frame = ComPtr(frame);
 
-        if *info.LastPresentTime.QuadPart() == 0 {
-            return Err(std::io::ErrorKind::WouldBlock.into());
-        }
+    //     if *info.LastPresentTime.QuadPart() == 0 {
+    //         return Err(std::io::ErrorKind::WouldBlock.into());
+    //     }
 
-        #[allow(invalid_value)]
-        let mut rect = mem::MaybeUninit::uninit().assume_init();
-        if self.fastlane {
-            wrap_hresult((*self.duplication.0).MapDesktopSurface(&mut rect))?;
-        } else {
-            self.surface = ComPtr(self.ohgodwhat(frame.0)?);
-            wrap_hresult((*self.surface.0).Map(&mut rect, DXGI_MAP_READ))?;
-        }
-        Ok((rect.pBits, rect.Pitch))
-    }
+    //     #[allow(invalid_value)]
+    //     let mut rect = mem::MaybeUninit::uninit().assume_init();
+    //     if self.fastlane {
+    //         wrap_hresult((*self.duplication.0).MapDesktopSurface(&mut rect))?;
+    //     } else {
+    //         self.surface = ComPtr(self.ohgodwhat(frame.0)?);
+    //         wrap_hresult((*self.surface.0).Map(&mut rect, DXGI_MAP_READ))?;
+    //     }
+    //     Ok((rect.pBits, rect.Pitch))
+    // }
 
     // copy from GPU memory to system memory
-    unsafe fn ohgodwhat(&mut self, frame: *mut IDXGIResource) -> io::Result<*mut IDXGISurface> {
-        let mut texture: *mut ID3D11Texture2D = ptr::null_mut();
-        (*frame).QueryInterface(
-            &IID_ID3D11Texture2D,
-            &mut texture as *mut *mut _ as *mut *mut _,
-        );
-        let texture = ComPtr(texture);
+    // unsafe fn ohgodwhat(&mut self, frame: *mut IDXGIResource) -> io::Result<*mut IDXGISurface> {
+    //     let mut texture: *mut ID3D11Texture2D = ptr::null_mut();
+    //     (*frame).QueryInterface(
+    //         &IID_ID3D11Texture2D,
+    //         &mut texture as *mut *mut _ as *mut *mut _,
+    //     );
+    //     let texture = ComPtr(texture);
 
-        #[allow(invalid_value)]
-        let mut texture_desc = mem::MaybeUninit::uninit().assume_init();
-        (*texture.0).GetDesc(&mut texture_desc);
+    //     #[allow(invalid_value)]
+    //     let mut texture_desc = mem::MaybeUninit::uninit().assume_init();
+    //     (*texture.0).GetDesc(&mut texture_desc);
 
-        texture_desc.Usage = D3D11_USAGE_STAGING;
-        texture_desc.BindFlags = 0;
-        texture_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        texture_desc.MiscFlags = 0;
+    //     texture_desc.Usage = D3D11_USAGE_STAGING;
+    //     texture_desc.BindFlags = 0;
+    //     texture_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    //     texture_desc.MiscFlags = 0;
 
-        let mut readable = ptr::null_mut();
-        wrap_hresult((*self.device.0).CreateTexture2D(
-            &mut texture_desc,
-            ptr::null(),
-            &mut readable,
-        ))?;
-        (*readable).SetEvictionPriority(DXGI_RESOURCE_PRIORITY_MAXIMUM);
-        let readable = ComPtr(readable);
+    //     let mut readable = ptr::null_mut();
+    //     wrap_hresult((*self.device.0).CreateTexture2D(
+    //         &mut texture_desc,
+    //         ptr::null(),
+    //         &mut readable,
+    //     ))?;
+    //     (*readable).SetEvictionPriority(DXGI_RESOURCE_PRIORITY_MAXIMUM);
+    //     let readable = ComPtr(readable);
 
-        let mut surface = ptr::null_mut();
-        (*readable.0).QueryInterface(
-            &IID_IDXGISurface,
-            &mut surface as *mut *mut _ as *mut *mut _,
-        );
+    //     let mut surface = ptr::null_mut();
+    //     (*readable.0).QueryInterface(
+    //         &IID_IDXGISurface,
+    //         &mut surface as *mut *mut _ as *mut *mut _,
+    //     );
 
-        (*self.context.0).CopyResource(readable.0 as *mut _, texture.0 as *mut _);
+    //     (*self.context.0).CopyResource(readable.0 as *mut _, texture.0 as *mut _);
 
-        Ok(surface)
-    }
+    //     Ok(surface)
+    // }
 
     pub fn frame<'a>(&'a mut self, timeout: UINT) -> io::Result<&'a [u8]> {
         unsafe {
             // Release last frame.
             // No error checking needed because we don't care.
             // None of the errors crash anyway.
-            let result = {
-                if let Some(gdi_capturer) = &self.gdi_capturer {
-                    match gdi_capturer.frame(&mut self.gdi_buffer) {
+            let result = 
+                // if let Some(gdi_capturer) = &self.gdi_capturer {
+                    match self.gdi_capturer.as_ref().unwrap().frame(&mut self.gdi_buffer) {
                         Ok(_) => {
                             crate::would_block_if_equal(
                                 &mut self.saved_raw_data,
@@ -248,76 +255,88 @@ impl Capturer {
                         Err(err) => {
                             return Err(io::Error::new(io::ErrorKind::Other, err.to_string()));
                         }
-                    }
-                } else {
-                    self.unmap();
-                    let r = self.load_frame(timeout)?;
-                    let rotate = match self.display.rotation() {
-                        DXGI_MODE_ROTATION_IDENTITY | DXGI_MODE_ROTATION_UNSPECIFIED => kRotate0,
-                        DXGI_MODE_ROTATION_ROTATE90 => kRotate90,
-                        DXGI_MODE_ROTATION_ROTATE180 => kRotate180,
-                        DXGI_MODE_ROTATION_ROTATE270 => kRotate270,
-                        _ => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::Other,
-                                "Unknown rotation".to_string(),
-                            ));
-                        }
                     };
-                    if rotate == kRotate0 {
-                        slice::from_raw_parts(r.0, r.1 as usize * self.height)
-                    } else {
-                        self.rotated.resize(self.width * self.height * 4, 0);
-                        crate::common::ARGBRotate(
-                            r.0,
-                            r.1,
-                            self.rotated.as_mut_ptr(),
-                            4 * self.width as i32,
-                            if rotate == kRotate180 {
-                                self.width
-                            } else {
-                                self.height
-                            } as _,
-                            if rotate != kRotate180 {
-                                self.width
-                            } else {
-                                self.height
-                            } as _,
-                            rotate,
-                        );
-                        &self.rotated[..]
-                    }
+                // } else {
+                //     self.unmap();
+                //     let r = self.load_frame(timeout)?;
+                //     let rotate = match self.display.rotation() {
+                //         DXGI_MODE_ROTATION_IDENTITY | DXGI_MODE_ROTATION_UNSPECIFIED => 0,
+                //         DXGI_MODE_ROTATION_ROTATE90 => 90,
+                //         DXGI_MODE_ROTATION_ROTATE180 => 180,
+                //         DXGI_MODE_ROTATION_ROTATE270 => 270,
+                //         _ => {
+                //             return Err(io::Error::new(
+                //                 io::ErrorKind::Other,
+                //                 "Unknown rotation".to_string(),
+                //             ));
+                //         }
+                //     };
+                //     if rotate == 0 {
+                //         slice::from_raw_parts(r.0, r.1 as usize * self.height)
+                //     } else {
+                //         self.rotated.resize(self.width * self.height * 4, 0);
+                //         crate::common::ARGBRotate(
+                //             r.0,
+                //             r.1,
+                //             self.rotated.as_mut_ptr(),
+                //             4 * self.width as i32,
+                //             if rotate == 180 {
+                //                 self.width
+                //             } else {
+                //                 self.height
+                //             } as _,
+                //             if rotate != 180 {
+                //                 self.width
+                //             } else {
+                //                 self.height
+                //             } as _,
+                //             rotate,
+                //         );
+                //         &self.rotated[..]
+                //     }
+                // }
+            
+            Ok({
+                if self.use_yuv {
+                    crate::common::bgra_to_i420(
+                        self.width as usize,
+                        self.height as usize,
+                        &result,
+                        &mut self.yuv,
+                    );
+                    &self.yuv[..]
+                } else {
+                    result
                 }
-            };
-            Ok(result)
+            })
         }
     }
 
-    fn unmap(&self) {
-        unsafe {
-            (*self.duplication.0).ReleaseFrame();
-            if self.fastlane {
-                (*self.duplication.0).UnMapDesktopSurface();
-            } else {
-                if !self.surface.is_null() {
-                    (*self.surface.0).Unmap();
-                }
-            }
-        }
-    }
+    // fn unmap(&self) {
+    //     unsafe {
+    //         (*self.duplication.0).ReleaseFrame();
+    //         if self.fastlane {
+    //             (*self.duplication.0).UnMapDesktopSurface();
+    //         } else {
+    //             if !self.surface.is_null() {
+    //                 (*self.surface.0).Unmap();
+    //             }
+    //         }
+    //     }
+    // }
 }
 
-impl Drop for Capturer {
-    fn drop(&mut self) {
-        if !self.duplication.is_null() {
-            self.unmap();
-        }
-    }
-}
+// impl Drop for Capturer {
+//     fn drop(&mut self) {
+//         if !self.duplication.is_null() {
+//             self.unmap();
+//         }
+//     }
+// }
 
 pub struct Displays {
-    factory: ComPtr<IDXGIFactory1>,
-    adapter: ComPtr<IDXGIAdapter1>,
+    // factory: ComPtr<IDXGIFactory1>,
+    // adapter: ComPtr<IDXGIAdapter1>,
     /// Index of the CURRENT adapter.
     nadapter: UINT,
     /// Index of the NEXT display to fetch.
@@ -325,24 +344,24 @@ pub struct Displays {
 }
 
 impl Displays {
-    pub fn new() -> io::Result<Displays> {
-        let mut factory = ptr::null_mut();
-        wrap_hresult(unsafe { CreateDXGIFactory1(&IID_IDXGIFactory1, &mut factory) })?;
+    // pub fn new() -> io::Result<Displays> {
+    //     let mut factory = ptr::null_mut();
+    //     wrap_hresult(unsafe { CreateDXGIFactory1(&IID_IDXGIFactory1, &mut factory) })?;
 
-        let factory = factory as *mut IDXGIFactory1;
-        let mut adapter = ptr::null_mut();
-        unsafe {
-            // On error, our adapter is null, so it's fine.
-            (*factory).EnumAdapters1(0, &mut adapter);
-        };
+    //     let factory = factory as *mut IDXGIFactory1;
+    //     let mut adapter = ptr::null_mut();
+    //     unsafe {
+    //         // On error, our adapter is null, so it's fine.
+    //         (*factory).EnumAdapters1(0, &mut adapter);
+    //     };
 
-        Ok(Displays {
-            factory: ComPtr(factory),
-            adapter: ComPtr(adapter),
-            nadapter: 0,
-            ndisplay: 0,
-        })
-    }
+    //     Ok(Displays {
+    //         factory: ComPtr(factory),
+    //         adapter: ComPtr(adapter),
+    //         nadapter: 0,
+    //         ndisplay: 0,
+    //     })
+    // }
 
     pub fn get_from_gdi() -> Vec<Display> {
         let mut all = Vec::new();
@@ -363,8 +382,8 @@ impl Displays {
             }
             // let is_primary = (d.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) > 0;
             let mut disp = Display {
-                inner: ComPtr(std::ptr::null_mut()),
-                adapter: ComPtr(std::ptr::null_mut()),
+                // inner: ComPtr(std::ptr::null_mut()),
+                // adapter: ComPtr(std::ptr::null_mut()),
                 desc: unsafe { std::mem::zeroed() },
                 gdi: true,
             };
@@ -399,100 +418,100 @@ impl Displays {
     // No Adapter => Some(None)
     // Non-Empty Adapter => Some(Some(OUTPUT))
     // End of Adapter => None
-    fn read_and_invalidate(&mut self) -> Option<Option<Display>> {
-        // If there is no adapter, there is nothing left for us to do.
+    // fn read_and_invalidate(&mut self) -> Option<Option<Display>> {
+    //     // If there is no adapter, there is nothing left for us to do.
 
-        if self.adapter.is_null() {
-            return Some(None);
-        }
+    //     if self.adapter.is_null() {
+    //         return Some(None);
+    //     }
 
-        // Otherwise, we get the next output of the current adapter.
+    //     // Otherwise, we get the next output of the current adapter.
 
-        let output = unsafe {
-            let mut output = ptr::null_mut();
-            (*self.adapter.0).EnumOutputs(self.ndisplay, &mut output);
-            ComPtr(output)
-        };
+    //     let output = unsafe {
+    //         let mut output = ptr::null_mut();
+    //         (*self.adapter.0).EnumOutputs(self.ndisplay, &mut output);
+    //         ComPtr(output)
+    //     };
 
-        // If the current adapter is done, we free it.
-        // We return None so the caller gets the next adapter and tries again.
+    //     // If the current adapter is done, we free it.
+    //     // We return None so the caller gets the next adapter and tries again.
 
-        if output.is_null() {
-            self.adapter = ComPtr(ptr::null_mut());
-            return None;
-        }
+    //     if output.is_null() {
+    //         self.adapter = ComPtr(ptr::null_mut());
+    //         return None;
+    //     }
 
-        // Advance to the next display.
+    //     // Advance to the next display.
 
-        self.ndisplay += 1;
+    //     self.ndisplay += 1;
 
-        // We get the display's details.
+    //     // We get the display's details.
 
-        let desc = unsafe {
-            #[allow(invalid_value)]
-            let mut desc = mem::MaybeUninit::uninit().assume_init();
-            (*output.0).GetDesc(&mut desc);
-            desc
-        };
+    //     let desc = unsafe {
+    //         #[allow(invalid_value)]
+    //         let mut desc = mem::MaybeUninit::uninit().assume_init();
+    //         (*output.0).GetDesc(&mut desc);
+    //         desc
+    //     };
 
-        // We cast it up to the version needed for desktop duplication.
+    //     // We cast it up to the version needed for desktop duplication.
 
-        let mut inner: *mut IDXGIOutput1 = ptr::null_mut();
-        unsafe {
-            (*output.0).QueryInterface(&IID_IDXGIOutput1, &mut inner as *mut *mut _ as *mut *mut _);
-        }
+    //     let mut inner: *mut IDXGIOutput1 = ptr::null_mut();
+    //     unsafe {
+    //         (*output.0).QueryInterface(&IID_IDXGIOutput1, &mut inner as *mut *mut _ as *mut *mut _);
+    //     }
 
-        // If it's null, we have an error.
-        // So we act like the adapter is done.
+    //     // If it's null, we have an error.
+    //     // So we act like the adapter is done.
 
-        if inner.is_null() {
-            self.adapter = ComPtr(ptr::null_mut());
-            return None;
-        }
+    //     if inner.is_null() {
+    //         self.adapter = ComPtr(ptr::null_mut());
+    //         return None;
+    //     }
 
-        unsafe {
-            (*self.adapter.0).AddRef();
-        }
+    //     unsafe {
+    //         (*self.adapter.0).AddRef();
+    //     }
 
-        Some(Some(Display {
-            inner: ComPtr(inner),
-            adapter: ComPtr(self.adapter.0),
-            desc,
-            gdi: false,
-        }))
-    }
+    //     Some(Some(Display {
+    //         inner: ComPtr(inner),
+    //         adapter: ComPtr(self.adapter.0),
+    //         desc,
+    //         gdi: false,
+    //     }))
+    // }
 }
 
-impl Iterator for Displays {
-    type Item = Display;
-    fn next(&mut self) -> Option<Display> {
-        if let Some(res) = self.read_and_invalidate() {
-            res
-        } else {
-            // We need to replace the adapter.
+// impl Iterator for Displays {
+//     type Item = Display;
+//     fn next(&mut self) -> Option<Display> {
+//         if let Some(res) = self.read_and_invalidate() {
+//             res
+//         } else {
+//             // We need to replace the adapter.
 
-            self.ndisplay = 0;
-            self.nadapter += 1;
+//             self.ndisplay = 0;
+//             self.nadapter += 1;
 
-            self.adapter = unsafe {
-                let mut adapter = ptr::null_mut();
-                (*self.factory.0).EnumAdapters1(self.nadapter, &mut adapter);
-                ComPtr(adapter)
-            };
+//             self.adapter = unsafe {
+//                 let mut adapter = ptr::null_mut();
+//                 (*self.factory.0).EnumAdapters1(self.nadapter, &mut adapter);
+//                 ComPtr(adapter)
+//             };
 
-            if let Some(res) = self.read_and_invalidate() {
-                res
-            } else {
-                // All subsequent adapters will also be empty.
-                None
-            }
-        }
-    }
-}
+//             if let Some(res) = self.read_and_invalidate() {
+//                 res
+//             } else {
+//                 // All subsequent adapters will also be empty.
+//                 None
+//             }
+//         }
+//     }
+// }
 
 pub struct Display {
-    inner: ComPtr<IDXGIOutput1>,
-    adapter: ComPtr<IDXGIAdapter1>,
+    // inner: ComPtr<IDXGIOutput1>,
+    // adapter: ComPtr<IDXGIAdapter1>,
     desc: DXGI_OUTPUT_DESC,
     gdi: bool,
 }

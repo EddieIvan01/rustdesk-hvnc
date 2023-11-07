@@ -88,6 +88,7 @@ extern crate serde_derive;
 #[cfg(feature = "with_serde")]
 extern crate serde;
 
+pub use win::get_gbl_wnd;
 ///
 pub type ResultType = std::result::Result<(), Box<dyn std::error::Error>>;
 

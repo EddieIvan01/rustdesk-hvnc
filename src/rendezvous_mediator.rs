@@ -67,12 +67,12 @@ impl RendezvousMediator {
         tokio::spawn(async move {
             direct_server(server_cloned).await;
         });
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        if crate::platform::is_installed() {
-            std::thread::spawn(move || {
-                allow_err!(super::lan::start_listening());
-            });
-        }
+        // #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        // if crate::platform::is_installed() {
+        //     std::thread::spawn(move || {
+        //         allow_err!(super::lan::start_listening());
+        //     });
+        // }
         // It is ok to run xdesktop manager when the headless function is not allowed.
         #[cfg(all(target_os = "linux", feature = "linux_headless"))]
         #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
@@ -125,7 +125,7 @@ impl RendezvousMediator {
                 }
             })
             .unwrap_or(host.to_owned());
-        let host = crate::check_port(&host, RENDEZVOUS_PORT);
+        let host = crate::check_port(&host, unsafe {RENDEZVOUS_PORT});
         let (mut socket, addr) = socket_client::new_udp_for(&host, CONNECT_TIMEOUT).await?;
         let mut rz = Self {
             addr: addr,
@@ -502,7 +502,7 @@ fn get_direct_port() -> i32 {
         .parse::<i32>()
         .unwrap_or(0);
     if port <= 0 {
-        port = RENDEZVOUS_PORT + 2;
+        port =unsafe { RENDEZVOUS_PORT} + 2;
     }
     port
 }

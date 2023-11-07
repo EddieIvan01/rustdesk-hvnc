@@ -1,6 +1,8 @@
 use super::*;
 #[cfg(target_os = "macos")]
 use crate::common::is_server;
+#[cfg(target_os = "linux")]
+use crate::common::IS_X11;
 use crate::input::*;
 #[cfg(target_os = "macos")]
 use dispatch::Queue;
@@ -537,16 +539,16 @@ fn get_modifier_state(key: Key, en: &mut Enigo) -> bool {
 }
 
 pub fn handle_mouse(evt: &MouseEvent, conn: i32) {
-    #[cfg(target_os = "macos")]
-    if !is_server() {
-        // having GUI, run main GUI thread, otherwise crash
-        let evt = evt.clone();
-        QUEUE.exec_async(move || handle_mouse_(&evt, conn));
-        return;
-    }
-    #[cfg(windows)]
-    crate::portable_service::client::handle_mouse(evt, conn);
-    #[cfg(not(windows))]
+    // #[cfg(target_os = "macos")]
+    // if !is_server() {
+    //     // having GUI, run main GUI thread, otherwise crash
+    //     let evt = evt.clone();
+    //     QUEUE.exec_async(move || handle_mouse_(&evt, conn));
+    //     return;
+    // }
+    // #[cfg(windows)]
+    // crate::portable_service::client::handle_mouse(evt, conn);
+    // #[cfg(not(windows))]
     handle_mouse_(evt, conn);
 }
 
@@ -559,9 +561,9 @@ pub fn handle_pointer(evt: &PointerDeviceEvent, conn: i32) {
         QUEUE.exec_async(move || handle_pointer_(&evt, conn));
         return;
     }
-    #[cfg(windows)]
-    crate::portable_service::client::handle_pointer(evt, conn);
-    #[cfg(not(windows))]
+    // #[cfg(windows)]
+    // crate::portable_service::client::handle_pointer(evt, conn);
+    // #[cfg(not(windows))]
     handle_pointer_(evt, conn);
 }
 
@@ -846,6 +848,7 @@ pub fn handle_mouse_(evt: &MouseEvent, conn: i32) {
             }
         }
     }
+    
     match evt_type {
         MOUSE_TYPE_MOVE => {
             en.mouse_move_to(evt.x, evt.y);
@@ -906,33 +909,33 @@ pub fn handle_mouse_(evt: &MouseEvent, conn: i32) {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             let is_track_pad = evt_type == MOUSE_TYPE_TRACKPAD;
 
-            #[cfg(target_os = "macos")]
-            {
-                // TODO: support track pad on win.
+            // #[cfg(target_os = "macos")]
+            // {
+            //     // TODO: support track pad on win.
 
-                // fix shift + scroll(down/up)
-                if !is_track_pad
-                    && evt
-                        .modifiers
-                        .contains(&EnumOrUnknown::new(ControlKey::Shift))
-                {
-                    x = y;
-                    y = 0;
-                }
+            //     // fix shift + scroll(down/up)
+            //     if !is_track_pad
+            //         && evt
+            //             .modifiers
+            //             .contains(&EnumOrUnknown::new(ControlKey::Shift))
+            //     {
+            //         x = y;
+            //         y = 0;
+            //     }
 
-                if x != 0 {
-                    en.mouse_scroll_x(x, is_track_pad);
-                }
-                if y != 0 {
-                    en.mouse_scroll_y(y, is_track_pad);
-                }
-            }
+            //     if x != 0 {
+            //         en.mouse_scroll_x(x, is_track_pad);
+            //     }
+            //     if y != 0 {
+            //         en.mouse_scroll_y(y, is_track_pad);
+            //     }
+            // }
 
-            #[cfg(windows)]
-            if !is_track_pad {
-                x *= WHEEL_DELTA as i32;
-                y *= WHEEL_DELTA as i32;
-            }
+            // #[cfg(windows)]
+            // if !is_track_pad {
+            //     x *= WHEEL_DELTA as i32;
+            //     y *= WHEEL_DELTA as i32;
+            // }
 
             #[cfg(not(target_os = "macos"))]
             {
@@ -1014,20 +1017,20 @@ pub async fn lock_screen() {
 }
 
 pub fn handle_key(evt: &KeyEvent) {
-    #[cfg(target_os = "macos")]
-    if !is_server() {
-        // having GUI, run main GUI thread, otherwise crash
-        let evt = evt.clone();
-        QUEUE.exec_async(move || handle_key_(&evt));
-        key_sleep();
-        return;
-    }
-    #[cfg(windows)]
-    crate::portable_service::client::handle_key(evt);
-    #[cfg(not(windows))]
+    // #[cfg(target_os = "macos")]
+    // if !is_server() {
+    //     // having GUI, run main GUI thread, otherwise crash
+    //     let evt = evt.clone();
+    //     QUEUE.exec_async(move || handle_key_(&evt));
+    //     key_sleep();
+    //     return;
+    // }
+    // #[cfg(windows)]
+    // crate::portable_service::client::handle_key(evt);
+    // #[cfg(not(windows))]
     handle_key_(evt);
-    #[cfg(target_os = "macos")]
-    key_sleep();
+    // #[cfg(target_os = "macos")]
+    // key_sleep();
 }
 
 #[cfg(target_os = "macos")]
@@ -1150,7 +1153,7 @@ fn map_keyboard_mode(evt: &KeyEvent) {
 
     // Wayland
     #[cfg(target_os = "linux")]
-    if !crate::platform::linux::is_x11() {
+    if !*IS_X11 {
         let mut en = ENIGO.lock().unwrap();
         let code = evt.chr() as u16;
 

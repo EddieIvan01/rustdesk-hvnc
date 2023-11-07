@@ -2,11 +2,14 @@ use self::winapi::ctypes::c_int;
 use self::winapi::shared::{basetsd::ULONG_PTR, minwindef::*, windef::*};
 use self::winapi::um::winbase::*;
 use self::winapi::um::winuser::*;
+use hbb_common::lazy_static::lazy_static;
+use hbb_common::tokio::sync::RwLock;
 use winapi;
 
 use crate::win::keycodes::*;
 use crate::{Key, KeyboardControllable, MouseButton, MouseControllable};
 use std::mem::*;
+use std::ptr;
 
 extern "system" {
     pub fn GetLastError() -> DWORD;
@@ -17,68 +20,374 @@ extern "system" {
 pub struct Enigo;
 static mut LAYOUT: HKL = std::ptr::null_mut();
 
-/// The dwExtraInfo value in keyboard and mouse structure that used in SendInput()
+/// The dwExtraInfo value in keyboard and mouse structure that used in
+/// SendInput()
 pub const ENIGO_INPUT_EXTRA_VALUE: ULONG_PTR = 100;
 
-fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
-    let mut u = INPUT_u::default();
+static mut MOUSE_DOWN: bool = false;
+static mut X: i32 = 0;
+static mut Y: i32 = 0;
+
+static mut LAST_MOUSE_DOWN: u32 = 0;
+static mut LAST_MOUSE_DOWN_X_Y: (i32, i32) = (0, 0);
+static mut LAST_POINT: (i32, i32) = (0, 0);
+
+const DBL_CLK_AREA_DELTA: i32 = 5;
+
+static mut MOVE_WINDOW: HWND = 0 as _;
+static mut MOVE_WINDOW_TYP: isize = 0;
+
+static mut GLOBAL_WND: HWND = 0 as _;
+
+///
+pub fn get_gbl_wnd() -> HWND {
+    unsafe { GLOBAL_WND }
+}
+
+fn print_wnd_name(wnd: HWND) -> String {
     unsafe {
-        *u.mi_mut() = MOUSEINPUT {
-            dx,
-            dy,
-            mouseData: data,
-            dwFlags: flags,
-            time: 0,
-            dwExtraInfo: ENIGO_INPUT_EXTRA_VALUE,
-        };
+        let mut x = vec![0_u8; 64];
+        GetClassNameA(wnd, x.as_mut_ptr() as _, 64);
+
+        return std::ffi::CStr::from_ptr(x.as_ptr() as _)
+            .to_str()
+            .unwrap_or("")
+            .to_owned();
     }
-    let mut input = INPUT {
-        type_: INPUT_MOUSE,
-        u,
-    };
-    unsafe { SendInput(1, &mut input as LPINPUT, size_of::<INPUT>() as c_int) }
+}
+
+fn wnd_cls_name(wnd: HWND) -> String {
+    unsafe {
+        let mut x = vec![0_u8; 32];
+        GetClassNameA(wnd, x.as_mut_ptr() as _, 64);
+
+        return std::ffi::CStr::from_ptr(x.as_ptr() as _)
+            .to_str()
+            .unwrap_or("")
+            .to_owned();
+    }
+}
+
+#[inline]
+fn is_dbl_clk(evt: u32, x: i32, y: i32) -> bool {
+    unsafe {
+        evt == LAST_MOUSE_DOWN
+            && (x - LAST_MOUSE_DOWN_X_Y.0).abs() < DBL_CLK_AREA_DELTA
+            && (y - LAST_MOUSE_DOWN_X_Y.1).abs() < DBL_CLK_AREA_DELTA
+    }
+}
+
+#[inline]
+fn lparam_from_point(point: POINT) -> isize {
+    point.x as isize | (point.y as isize) << 16
+}
+
+fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
+    // let mut u = INPUT_u::default();
+    // unsafe {
+    //     *u.mi_mut() = MOUSEINPUT {
+    //         dx,
+    //         dy,
+    //         mouseData: data,
+    //         dwFlags: flags,
+    //         time: 0,
+    //         dwExtraInfo: ENIGO_INPUT_EXTRA_VALUE,
+    //     };
+    // }
+    // let mut input = INPUT {
+    //     type_: INPUT_MOUSE,
+    //     u,
+    // };
+    // unsafe { SendInput(1, &mut input as LPINPUT, size_of::<INPUT>() as c_int) }
+
+    const MOVE: u32 = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+    unsafe {
+        match flags {
+            MOVE => {
+                X = dx;
+                Y = dy;
+
+                // if !MOUSE_DOWN {
+                //     return 1;
+                // }
+
+                // let wnd = MOVE_WINDOW;
+
+                // let move_x = LAST_POINT.0 - dx;
+                // let move_y = LAST_POINT.1 - dy;
+
+                // // println!("{move_x} {move_y}");
+
+                // let mut rect: RECT = zeroed();
+                // GetWindowRect(wnd, &mut rect);
+
+                // let mut wx = rect.left;
+                // let mut wy = rect.top;
+                // let mut width = rect.right - rect.left;
+                // let mut height = rect.bottom - rect.top;
+
+                // // wx -= move_x;
+                // //         wy -= move_y;
+                // if MOVE_WINDOW_TYP == HTCAPTION {
+                //     wx = dx;
+                //     wy = dy;
+                // }
+
+                // match MOVE_WINDOW_TYP {
+                //     HICAPTION => {
+                //         wx -= move_x;
+                //         wy -= move_y;
+                //     }
+
+                //     HTTOP => {
+                //         wy -= move_y;
+                //         height += move_y;
+                //     }
+
+                //     HTBOTTOM => {
+                //         height -= move_y;
+
+                //     }
+
+                //     HTLEFT => {
+                //         wx -= move_x;
+                //         width += move_x;
+                //     }
+
+                //     HIRIGHT => {
+
+                //         width -= move_x;
+                //     }
+
+                //     HTTOPLEFT => {
+                //         wy -= move_y;
+                //         height += move_y;
+                //         wx -= move_x;
+                //         width -= move_x;
+                //     }
+
+                //     HTTIOLEFT => {
+                //         wy -= move_y;
+                //         height += move_y;
+                //         width -= move_x;
+                //     }
+
+                //     HTBOTTOMLEFT => {
+                //         height -= move_y;
+                //         wx -= move_x;
+                //         width += move_x;
+                //     }
+
+                //     HTBOTTOMRIGHT => {
+
+                //         height -= move_y;
+                //         width -= move_x;
+                //     }
+
+                //     _ => {}
+
+                // }
+
+                // MoveWindow(wnd, wx, wy, width, height, 0);
+                // // MOVE_WINDOW = wnd;
+
+                // LAST_POINT = (dx, dy);
+            }
+            _ => {
+                let mut point = POINT { x: X, y: Y };
+                let mut wnd = WindowFromPoint(point);
+                let screen_lparam = lparam_from_point(point);
+
+                let mut curr_wnd = wnd;
+                let mut client_wnd = wnd;
+                loop {
+                    curr_wnd = client_wnd;
+                    ScreenToClient(curr_wnd, &mut point);
+                    client_wnd = ChildWindowFromPoint(client_wnd, point);
+                    if client_wnd == curr_wnd || client_wnd.is_null() {
+                        break;
+                    }
+                }
+
+                GLOBAL_WND = wnd;
+
+                let client_lparam = lparam_from_point(point);
+
+                match flags {
+                    MOUSEEVENTF_LEFTDOWN => {
+                        MOUSE_DOWN = true;
+                        MOVE_WINDOW = wnd;
+                        println!("set move window {}", print_wnd_name(wnd));
+                        // MOVE_WINDOW_TYP = SendMessageA(wnd, WM_NCHITTEST, 0, screen_lparam);
+
+                        let start_button = FindWindowA("Button\0".as_ptr() as _, ptr::null());
+                        let mut rect: RECT = zeroed();
+                        GetWindowRect(start_button, &mut rect);
+
+                        if PtInRect(&rect, POINT { x: X, y: Y }) != 0 {
+                            PostMessageA(start_button, BM_CLICK, 0, 0);
+                        } else {
+                            let mut cls = [0_u8; 256];
+                            RealGetWindowClassA(wnd, cls.as_mut_ptr() as _, 256);
+                            
+                            if cls.starts_with(&[b'#', b'3', b'2', b'7', b'6', b'8']) {
+                                let menu = SendMessageA(wnd, MN_GETHMENU, 0, 0);
+                                let item_pos = MenuItemFromPoint(
+                                    ptr::null_mut(),
+                                    menu as _,
+                                    POINT { x: X, y: Y },
+                                );
+                                // let item_id = GetMenuItemID(menu as _, item_pos);
+                                PostMessageA(wnd, 0x1e5, item_pos as _, 0);
+                                PostMessageA(wnd, WM_KEYDOWN, VK_RETURN as _, 0);
+                            }
+                        }
+
+                        // I don't know why
+                        let lparam = if wnd_cls_name(wnd) == "SysTreeView32" {
+                            screen_lparam
+                        } else {
+                            client_lparam
+                        };
+                        if is_dbl_clk(MOUSEEVENTF_LEFTDOWN, point.x, point.y) {
+                            PostMessageA(client_wnd, WM_LBUTTONDBLCLK, MK_LBUTTON, lparam);
+                            LAST_MOUSE_DOWN = 0;
+                            LAST_MOUSE_DOWN_X_Y = (0, 0);
+                        } else {
+                            println!("click {}", wnd_cls_name(wnd));
+                            PostMessageA(client_wnd, WM_LBUTTONDOWN, 0, lparam);
+                            LAST_MOUSE_DOWN = MOUSEEVENTF_LEFTDOWN;
+                            LAST_MOUSE_DOWN_X_Y = (point.x, point.y);
+                        }
+                    }
+                    MOUSEEVENTF_MIDDLEDOWN => {
+                        PostMessageA(client_wnd, WM_MBUTTONDOWN, MK_MBUTTON, client_lparam);
+                    }
+                    MOUSEEVENTF_RIGHTDOWN => {
+                        PostMessageA(client_wnd, WM_RBUTTONDOWN, MK_RBUTTON, client_lparam);
+                    }
+                    MOUSEEVENTF_XDOWN => {
+                        PostMessageA(client_wnd, WM_MOUSEWHEEL, MK_RBUTTON, client_lparam);
+                    }
+                    MOUSEEVENTF_LEFTUP => {
+                        MOUSE_DOWN = false;
+                        MOVE_WINDOW = 0 as _;
+
+                        if wnd_cls_name(wnd) != "SysTreeView32" {
+                            let ret = SendMessageA(wnd, WM_NCHITTEST, 0, screen_lparam);
+                            match ret {
+                                HTTRANSPARENT => {
+                                    SetWindowLongPtrA(
+                                        wnd,
+                                        GWL_STYLE,
+                                        GetWindowLongA(wnd, GWL_STYLE) as isize
+                                            | WS_DISABLED as isize,
+                                    );
+                                    SendMessageA(wnd, WM_NCHITTEST, 0, screen_lparam);
+                                }
+                                HTCLOSE => {
+                                    PostMessageA(wnd, WM_CLOSE, 0, 0);
+                                }
+                                HTMINBUTTON => {
+                                    PostMessageA(wnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+                                }
+                                HTMAXBUTTON => {
+                                    let mut placement: WINDOWPLACEMENT = zeroed();
+                                    placement.length = size_of::<WINDOWPLACEMENT>() as _;
+                                    GetWindowPlacement(wnd, &mut placement);
+
+                                    if placement.flags as i32 & SW_SHOWMAXIMIZED != 0 {
+                                        PostMessageA(wnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+                                    } else {
+                                        PostMessageA(wnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+                                    }
+                                }
+                                _ => {
+                                    if ret != 0 {
+                                        PostMessageA(wnd, WM_ACTIVATE, WA_ACTIVE as _, 0);
+                                        PostMessageA(wnd, WM_SETFOCUS, 0, 0);
+                                    }
+                                }
+                            }
+                        }
+
+                        PostMessageA(client_wnd, WM_LBUTTONUP, 0, client_lparam);
+                    }
+                    MOUSEEVENTF_MIDDLEUP => {
+                        PostMessageA(client_wnd, WM_MBUTTONUP, 0, client_lparam);
+                    }
+                    MOUSEEVENTF_RIGHTUP => {
+                        PostMessageA(client_wnd, WM_RBUTTONUP, 0, client_lparam);
+                    }
+                    MOUSEEVENTF_XUP => {}
+                    MOUSEEVENTF_HWHEEL => {
+                        PostMessageA(
+                            client_wnd,
+                            WM_MOUSEHWHEEL,
+                            (data << 16) as usize,
+                            screen_lparam,
+                        );
+                    }
+                    MOUSEEVENTF_WHEEL => {
+                        PostMessageA(
+                            client_wnd,
+                            WM_MOUSEWHEEL,
+                            (data << 16) as usize,
+                            screen_lparam,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    return 1;
 }
 
 fn keybd_event(mut flags: u32, vk: u16, scan: u16) -> DWORD {
-    let mut scan = scan;
-    unsafe {
-        // https://github.com/rustdesk/rustdesk/issues/366
-        if scan == 0 {
-            if LAYOUT.is_null() {
-                let current_window_thread_id =
-                    GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut());
-                LAYOUT = GetKeyboardLayout(current_window_thread_id);
-            }
-            scan = MapVirtualKeyExW(vk as _, 0, LAYOUT) as _;
-        }
-    }
+    // let mut scan = scan;
+    // unsafe {
+    //     // https://github.com/rustdesk/rustdesk/issues/366
+    //     if scan == 0 {
+    //         if LAYOUT.is_null() {
+    //             let current_window_thread_id =
+    //                 GetWindowThreadProcessId(GetForegroundWindow(),
+    // std::ptr::null_mut());             LAYOUT =
+    // GetKeyboardLayout(current_window_thread_id);         }
+    //         scan = MapVirtualKeyExW(vk as _, 0, LAYOUT) as _;
+    //     }
+    // }
 
-    if flags & KEYEVENTF_UNICODE == 0 {
-        if scan >> 8 == 0xE0 || scan >> 8 == 0xE1 {
-            flags |= winapi::um::winuser::KEYEVENTF_EXTENDEDKEY;
-        }
-    }
-    let mut union: INPUT_u = unsafe { std::mem::zeroed() };
-    unsafe {
-        *union.ki_mut() = KEYBDINPUT {
-            wVk: vk,
-            wScan: scan,
-            dwFlags: flags,
-            time: 0,
-            dwExtraInfo: ENIGO_INPUT_EXTRA_VALUE,
-        };
-    }
-    let mut inputs = [INPUT {
-        type_: INPUT_KEYBOARD,
-        u: union,
-    }; 1];
-    unsafe {
-        SendInput(
-            inputs.len() as UINT,
-            inputs.as_mut_ptr(),
-            size_of::<INPUT>() as c_int,
-        )
-    }
+    // if flags & KEYEVENTF_UNICODE == 0 {
+    //     if scan >> 8 == 0xE0 || scan >> 8 == 0xE1 {
+    //         flags |= winapi::um::winuser::KEYEVENTF_EXTENDEDKEY;
+    //     }
+    // }
+    // let mut union: INPUT_u = unsafe { std::mem::zeroed() };
+    // unsafe {
+    //     *union.ki_mut() = KEYBDINPUT {
+    //         wVk: vk,
+    //         wScan: scan,
+    //         dwFlags: flags,
+    //         time: 0,
+    //         dwExtraInfo: ENIGO_INPUT_EXTRA_VALUE,
+    //     };
+    // }
+    // let mut inputs = [INPUT {
+    //     type_: INPUT_KEYBOARD,
+    //     u: union,
+    // }; 1];
+    // unsafe {
+    //     SendInput(
+    //         inputs.len() as UINT,
+    //         inputs.as_mut_ptr(),
+    //         size_of::<INPUT>() as c_int,
+    //     )
+    // }
+    // println!("{flags} {vk} {scan}");
+
+    return 1;
 }
 
 fn get_error() -> String {
@@ -129,10 +438,12 @@ impl MouseControllable for Enigo {
         mouse_event(
             MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
             0,
-            (x - unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) }) * 65535
-                / unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) },
-            (y - unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) }) * 65535
-                / unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) },
+            x,
+            y,
+            // (x - unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) }) * 65535
+            //     / unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) },
+            // (y - unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) }) * 65535
+            //     / unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) },
         );
     }
 

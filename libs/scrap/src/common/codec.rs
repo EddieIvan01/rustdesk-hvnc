@@ -14,7 +14,7 @@ use crate::{
     aom::{self, AomDecoder, AomEncoder, AomEncoderConfig},
     common::GoogleImage,
     vpxcodec::{self, VpxDecoder, VpxDecoderConfig, VpxEncoder, VpxEncoderConfig, VpxVideoCodecId},
-    CodecName, EncodeYuvFormat, ImageRgb,
+    CodecName, ImageRgb,
 };
 
 use hbb_common::{
@@ -23,7 +23,7 @@ use hbb_common::{
     config::PeerConfig,
     log,
     message_proto::{
-        supported_decoding::PreferCodec, video_frame, Chroma, CodecAbility, EncodedVideoFrames,
+        supported_decoding::PreferCodec, video_frame, EncodedVideoFrames,
         SupportedDecoding, SupportedEncoding, VideoFrame,
     },
     sysinfo::{System, SystemExt},
@@ -56,13 +56,13 @@ pub enum EncoderCfg {
 }
 
 pub trait EncoderApi {
-    fn new(cfg: EncoderCfg, i444: bool) -> ResultType<Self>
+    fn new(cfg: EncoderCfg) -> ResultType<Self>
     where
         Self: Sized;
 
     fn encode_to_message(&mut self, frame: &[u8], ms: i64) -> ResultType<VideoFrame>;
 
-    fn yuvfmt(&self) -> EncodeYuvFormat;
+    fn use_yuv(&self) -> bool;
 
     fn set_quality(&mut self, quality: Quality) -> ResultType<()>;
 
@@ -107,18 +107,18 @@ pub enum EncodingUpdate {
 }
 
 impl Encoder {
-    pub fn new(config: EncoderCfg, i444: bool) -> ResultType<Encoder> {
-        log::info!("new encoder:{config:?}, i444:{i444}");
+    pub fn new(config: EncoderCfg) -> ResultType<Encoder> {
+        log::info!("new encoder:{:?}", config);
         match config {
             EncoderCfg::VPX(_) => Ok(Encoder {
-                codec: Box::new(VpxEncoder::new(config, i444)?),
+                codec: Box::new(VpxEncoder::new(config)?),
             }),
             EncoderCfg::AOM(_) => Ok(Encoder {
-                codec: Box::new(AomEncoder::new(config, i444)?),
+                codec: Box::new(AomEncoder::new(config)?),
             }),
 
             #[cfg(feature = "hwcodec")]
-            EncoderCfg::HW(_) => match HwEncoder::new(config, i444) {
+            EncoderCfg::HW(_) => match HwEncoder::new(config) {
                 Ok(hw) => Ok(Encoder {
                     codec: Box::new(hw),
                 }),
@@ -230,12 +230,6 @@ impl Encoder {
         let mut encoding = SupportedEncoding {
             vp8: true,
             av1: true,
-            i444: Some(CodecAbility {
-                vp9: true,
-                av1: true,
-                ..Default::default()
-            })
-            .into(),
             ..Default::default()
         };
         #[cfg(feature = "hwcodec")]
@@ -246,41 +240,18 @@ impl Encoder {
         }
         encoding
     }
-
-    pub fn use_i444(config: &EncoderCfg) -> bool {
-        let decodings = PEER_DECODINGS.lock().unwrap().clone();
-        let prefer_i444 = decodings
-            .iter()
-            .all(|d| d.1.prefer_chroma == Chroma::I444.into());
-        let i444_useable = match config {
-            EncoderCfg::VPX(vpx) => match vpx.codec {
-                VpxVideoCodecId::VP8 => false,
-                VpxVideoCodecId::VP9 => decodings.iter().all(|d| d.1.i444.vp9),
-            },
-            EncoderCfg::AOM(_) => decodings.iter().all(|d| d.1.i444.av1),
-            EncoderCfg::HW(_) => false,
-        };
-        prefer_i444 && i444_useable && !decodings.is_empty()
-    }
 }
 
 impl Decoder {
     pub fn supported_decodings(id_for_perfer: Option<&str>) -> SupportedDecoding {
-        let (prefer, prefer_chroma) = Self::preference(id_for_perfer);
-
         #[allow(unused_mut)]
         let mut decoding = SupportedDecoding {
             ability_vp8: 1,
             ability_vp9: 1,
             ability_av1: 1,
-            i444: Some(CodecAbility {
-                vp9: true,
-                av1: true,
-                ..Default::default()
-            })
-            .into(),
-            prefer: prefer.into(),
-            prefer_chroma: prefer_chroma.into(),
+            prefer: id_for_perfer
+                .map_or(PreferCodec::Auto, |id| Self::codec_preference(id))
+                .into(),
             ..Default::default()
         };
         #[cfg(feature = "hwcodec")]
@@ -343,33 +314,31 @@ impl Decoder {
         &mut self,
         frame: &video_frame::Union,
         rgb: &mut ImageRgb,
-        chroma: &mut Option<Chroma>,
     ) -> ResultType<bool> {
         match frame {
             video_frame::Union::Vp8s(vp8s) => {
                 if let Some(vp8) = &mut self.vp8 {
-                    Decoder::handle_vpxs_video_frame(vp8, vp8s, rgb, chroma)
+                    Decoder::handle_vpxs_video_frame(vp8, vp8s, rgb)
                 } else {
                     bail!("vp8 decoder not available");
                 }
             }
             video_frame::Union::Vp9s(vp9s) => {
                 if let Some(vp9) = &mut self.vp9 {
-                    Decoder::handle_vpxs_video_frame(vp9, vp9s, rgb, chroma)
+                    Decoder::handle_vpxs_video_frame(vp9, vp9s, rgb)
                 } else {
                     bail!("vp9 decoder not available");
                 }
             }
             video_frame::Union::Av1s(av1s) => {
                 if let Some(av1) = &mut self.av1 {
-                    Decoder::handle_av1s_video_frame(av1, av1s, rgb, chroma)
+                    Decoder::handle_av1s_video_frame(av1, av1s, rgb)
                 } else {
                     bail!("av1 decoder not available");
                 }
             }
             #[cfg(feature = "hwcodec")]
             video_frame::Union::H264s(h264s) => {
-                *chroma = Some(Chroma::I420);
                 if let Some(decoder) = &mut self.hw.h264 {
                     Decoder::handle_hw_video_frame(decoder, h264s, rgb, &mut self.i420)
                 } else {
@@ -378,7 +347,6 @@ impl Decoder {
             }
             #[cfg(feature = "hwcodec")]
             video_frame::Union::H265s(h265s) => {
-                *chroma = Some(Chroma::I420);
                 if let Some(decoder) = &mut self.hw.h265 {
                     Decoder::handle_hw_video_frame(decoder, h265s, rgb, &mut self.i420)
                 } else {
@@ -387,7 +355,6 @@ impl Decoder {
             }
             #[cfg(feature = "mediacodec")]
             video_frame::Union::H264s(h264s) => {
-                *chroma = Some(Chroma::I420);
                 if let Some(decoder) = &mut self.media_codec.h264 {
                     Decoder::handle_mediacodec_video_frame(decoder, h264s, rgb)
                 } else {
@@ -396,7 +363,6 @@ impl Decoder {
             }
             #[cfg(feature = "mediacodec")]
             video_frame::Union::H265s(h265s) => {
-                *chroma = Some(Chroma::I420);
                 if let Some(decoder) = &mut self.media_codec.h265 {
                     Decoder::handle_mediacodec_video_frame(decoder, h265s, rgb)
                 } else {
@@ -412,7 +378,6 @@ impl Decoder {
         decoder: &mut VpxDecoder,
         vpxs: &EncodedVideoFrames,
         rgb: &mut ImageRgb,
-        chroma: &mut Option<Chroma>,
     ) -> ResultType<bool> {
         let mut last_frame = vpxcodec::Image::new();
         for vpx in vpxs.frames.iter() {
@@ -428,7 +393,6 @@ impl Decoder {
         if last_frame.is_null() {
             Ok(false)
         } else {
-            *chroma = Some(last_frame.chroma());
             last_frame.to(rgb);
             Ok(true)
         }
@@ -439,7 +403,6 @@ impl Decoder {
         decoder: &mut AomDecoder,
         av1s: &EncodedVideoFrames,
         rgb: &mut ImageRgb,
-        chroma: &mut Option<Chroma>,
     ) -> ResultType<bool> {
         let mut last_frame = aom::Image::new();
         for av1 in av1s.frames.iter() {
@@ -455,7 +418,6 @@ impl Decoder {
         if last_frame.is_null() {
             Ok(false)
         } else {
-            *chroma = Some(last_frame.chroma());
             last_frame.to(rgb);
             Ok(true)
         }
@@ -495,16 +457,12 @@ impl Decoder {
         return Ok(false);
     }
 
-    fn preference(id: Option<&str>) -> (PreferCodec, Chroma) {
-        let id = id.unwrap_or_default();
-        if id.is_empty() {
-            return (PreferCodec::Auto, Chroma::I420);
-        }
-        let options = PeerConfig::load(id).options;
-        let codec = options
+    fn codec_preference(id: &str) -> PreferCodec {
+        let codec = PeerConfig::load(id)
+            .options
             .get("codec-preference")
             .map_or("".to_owned(), |c| c.to_owned());
-        let codec = if codec == "vp8" {
+        if codec == "vp8" {
             PreferCodec::VP8
         } else if codec == "vp9" {
             PreferCodec::VP9
@@ -516,13 +474,7 @@ impl Decoder {
             PreferCodec::H265
         } else {
             PreferCodec::Auto
-        };
-        let chroma = if options.get("i444") == Some(&"Y".to_string()) {
-            Chroma::I444
-        } else {
-            Chroma::I420
-        };
-        (codec, chroma)
+        }
     }
 }
 

@@ -149,14 +149,14 @@ fn handle_config_options(config_options: HashMap<String, String>) {
         .map(|(k, v)| {
             if k == "allow-share-rdp" {
                 // only changes made after installation take effect.
-                #[cfg(windows)]
-                if crate::ui_interface::is_rdp_service_open() {
-                    let current = crate::ui_interface::is_share_rdp();
-                    let set = v == "Y";
-                    if current != set {
-                        crate::platform::windows::set_share_rdp(set);
-                    }
-                }
+                // #[cfg(windows)]
+                // if crate::ui_interface::is_rdp_service_open() {
+                //     let current = crate::ui_interface::is_share_rdp();
+                //     let set = v == "Y";
+                //     if current != set {
+                //         crate::platform::windows::set_share_rdp(set);
+                //     }
+                // }
             } else {
                 if v.is_empty() {
                     options.remove(k);

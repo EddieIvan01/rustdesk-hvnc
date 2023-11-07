@@ -11,117 +11,8 @@ pub enum GrabState {
     Exit,
 }
 
-#[cfg(not(any(
-    target_os = "android",
-    target_os = "ios",
-    all(target_os = "linux", feature = "unix-file-copy-paste")
-)))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use arboard::Clipboard as ClipboardContext;
-
-#[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
-static X11_CLIPBOARD: once_cell::sync::OnceCell<x11_clipboard::Clipboard> =
-    once_cell::sync::OnceCell::new();
-
-#[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
-fn get_clipboard() -> Result<&'static x11_clipboard::Clipboard, String> {
-    X11_CLIPBOARD
-        .get_or_try_init(|| x11_clipboard::Clipboard::new())
-        .map_err(|e| e.to_string())
-}
-
-#[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
-pub struct ClipboardContext {
-    string_setter: x11rb::protocol::xproto::Atom,
-    string_getter: x11rb::protocol::xproto::Atom,
-    text_uri_list: x11rb::protocol::xproto::Atom,
-
-    clip: x11rb::protocol::xproto::Atom,
-    prop: x11rb::protocol::xproto::Atom,
-}
-
-#[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
-fn parse_plain_uri_list(v: Vec<u8>) -> Result<String, String> {
-    let text = String::from_utf8(v).map_err(|_| "ConversionFailure".to_owned())?;
-    let mut list = String::new();
-    for line in text.lines() {
-        if !line.starts_with("file://") {
-            continue;
-        }
-        let decoded = percent_encoding::percent_decode_str(line)
-            .decode_utf8()
-            .map_err(|_| "ConversionFailure".to_owned())?;
-        list = list + "\n" + decoded.trim_start_matches("file://");
-    }
-    list = list.trim().to_owned();
-    Ok(list)
-}
-
-#[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
-impl ClipboardContext {
-    pub fn new() -> Result<Self, String> {
-        let clipboard = get_clipboard()?;
-        let string_getter = clipboard
-            .getter
-            .get_atom("UTF8_STRING")
-            .map_err(|e| e.to_string())?;
-        let string_setter = clipboard
-            .setter
-            .get_atom("UTF8_STRING")
-            .map_err(|e| e.to_string())?;
-        let text_uri_list = clipboard
-            .getter
-            .get_atom("text/uri-list")
-            .map_err(|e| e.to_string())?;
-        let prop = clipboard.getter.atoms.property;
-        let clip = clipboard.getter.atoms.clipboard;
-        Ok(Self {
-            text_uri_list,
-            string_setter,
-            string_getter,
-            clip,
-            prop,
-        })
-    }
-
-    pub fn get_text(&mut self) -> Result<String, String> {
-        let clip = self.clip;
-        let prop = self.prop;
-
-        const TIMEOUT: std::time::Duration = std::time::Duration::from_millis(120);
-
-        let text_content = get_clipboard()?
-            .load(clip, self.string_getter, prop, TIMEOUT)
-            .map_err(|e| e.to_string())?;
-
-        let file_urls = get_clipboard()?.load(clip, self.text_uri_list, prop, TIMEOUT);
-
-        if file_urls.is_err() || file_urls.as_ref().unwrap().is_empty() {
-            log::trace!("clipboard get text, no file urls");
-            return String::from_utf8(text_content).map_err(|e| e.to_string());
-        }
-
-        let file_urls = parse_plain_uri_list(file_urls.unwrap())?;
-
-        let text_content = String::from_utf8(text_content).map_err(|e| e.to_string())?;
-
-        if text_content.trim() == file_urls.trim() {
-            log::trace!("clipboard got text but polluted");
-            return Err(String::from("polluted text"));
-        }
-
-        Ok(text_content)
-    }
-
-    pub fn set_text(&mut self, content: String) -> Result<(), String> {
-        let clip = self.clip;
-
-        let value = content.clone().into_bytes();
-        get_clipboard()?
-            .store(clip, self.string_setter, value)
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-}
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::compress::decompress;
@@ -141,7 +32,7 @@ use hbb_common::{
 // #[cfg(any(target_os = "android", target_os = "ios", feature = "cli"))]
 use hbb_common::{config::RENDEZVOUS_PORT, futures::future::join_all};
 
-use crate::ui_interface::{get_option, set_option};
+// use crate::ui_interface::{get_option, set_option};
 
 pub type NotifyMessageBox = fn(String, String, String, String) -> dyn Future<Output = ()>;
 
@@ -217,7 +108,7 @@ impl Drop for SimpleCallOnReturn {
 pub fn global_init() -> bool {
     #[cfg(target_os = "linux")]
     {
-        if !crate::platform::linux::is_x11() {
+        if !*IS_X11 {
             crate::server::wayland::init();
         }
     }
@@ -302,18 +193,18 @@ pub fn check_clipboard(
     None
 }
 
-/// Set sound input device.
-pub fn set_sound_input(device: String) {
-    let prior_device = get_option("audio-input".to_owned());
-    if prior_device != device {
-        log::info!("switch to audio input device {}", device);
-        std::thread::spawn(move || {
-            set_option("audio-input".to_owned(), device);
-        });
-    } else {
-        log::info!("audio input is already set to {}", device);
-    }
-}
+// /// Set sound input device.
+// pub fn set_sound_input(device: String) {
+//     let prior_device = get_option("audio-input".to_owned());
+//     if prior_device != device {
+//         log::info!("switch to audio input device {}", device);
+//         std::thread::spawn(move || {
+//             set_option("audio-input".to_owned(), device);
+//         });
+//     } else {
+//         log::info!("audio input is already set to {}", device);
+//     }
+// }
 
 /// Get system's default sound input device name.
 #[inline]
@@ -378,18 +269,18 @@ pub fn update_clipboard(clipboard: Clipboard, old: Option<&Arc<Mutex<String>>>) 
     }
 }
 
-pub async fn send_opts_after_login(
-    config: &crate::client::LoginConfigHandler,
-    peer: &mut FramedStream,
-) {
-    if let Some(opts) = config.get_option_message_after_login() {
-        let mut misc = Misc::new();
-        misc.set_option(opts);
-        let mut msg_out = Message::new();
-        msg_out.set_misc(misc);
-        allow_err!(peer.send(&msg_out).await);
-    }
-}
+// pub async fn send_opts_after_login(
+//     config: &crate::client::LoginConfigHandler,
+//     peer: &mut FramedStream,
+// ) {
+//     if let Some(opts) = config.get_option_message_after_login() {
+//         let mut misc = Misc::new();
+//         misc.set_option(opts);
+//         let mut msg_out = Message::new();
+//         msg_out.set_misc(misc);
+//         allow_err!(peer.send(&msg_out).await);
+//     }
+// }
 
 #[cfg(feature = "use_rubato")]
 pub fn resample_channels(
@@ -751,15 +642,15 @@ pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>, boo
     let (mut a, mut b) = get_rendezvous_server_(ms_timeout);
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let (mut a, mut b) = get_rendezvous_server_(ms_timeout).await;
-    #[cfg(windows)]
-    if let Ok(lic) = crate::platform::get_license_from_exe_name() {
-        if !lic.host.is_empty() {
-            a = lic.host;
-        }
-    }
+    // #[cfg(windows)]
+    // if let Ok(lic) = crate::platform::get_license_from_exe_name() {
+    //     if !lic.host.is_empty() {
+    //         a = lic.host;
+    //     }
+    // }
     let mut b: Vec<String> = b
         .drain(..)
-        .map(|x| socket_client::check_port(x, config::RENDEZVOUS_PORT))
+        .map(|x| socket_client::check_port(x, unsafe {config::RENDEZVOUS_PORT}))
         .collect();
     let c = if b.contains(&a) {
         b = b.drain(..).filter(|x| x != &a).collect();
@@ -810,7 +701,7 @@ async fn test_rendezvous_server_() {
         futs.push(tokio::spawn(async move {
             let tm = std::time::Instant::now();
             if socket_client::connect_tcp(
-                crate::check_port(&host, RENDEZVOUS_PORT),
+                crate::check_port(&host, unsafe {RENDEZVOUS_PORT}),
                 CONNECT_TIMEOUT,
             )
             .await
@@ -913,7 +804,7 @@ pub fn get_sysinfo() -> serde_json::Value {
     });
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        out["username"] = json!(crate::platform::get_active_username());
+        out["username"] = json!(crate::username());
     }
     out
 }
@@ -997,12 +888,12 @@ pub fn is_setup(name: &str) -> bool {
 }
 
 pub fn get_custom_rendezvous_server(custom: String) -> String {
-    #[cfg(windows)]
-    if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
-        if !lic.host.is_empty() {
-            return lic.host.clone();
-        }
-    }
+    // #[cfg(windows)]
+    // if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
+    //     if !lic.host.is_empty() {
+    //         return lic.host.clone();
+    //     }
+    // }
     if !custom.is_empty() {
         return custom;
     }
@@ -1013,12 +904,12 @@ pub fn get_custom_rendezvous_server(custom: String) -> String {
 }
 
 pub fn get_api_server(api: String, custom: String) -> String {
-    #[cfg(windows)]
-    if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
-        if !lic.api.is_empty() {
-            return lic.api.clone();
-        }
-    }
+    // #[cfg(windows)]
+    // if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
+    //     if !lic.api.is_empty() {
+    //         return lic.api.clone();
+    //     }
+    // }
     if !api.is_empty() {
         return api.to_owned();
     }
@@ -1030,7 +921,7 @@ pub fn get_api_server(api: String, custom: String) -> String {
     if !s0.is_empty() {
         let s = crate::increase_port(&s0, -2);
         if s == s0 {
-            return format!("http://{}:{}", s, config::RENDEZVOUS_PORT - 2);
+            return format!("http://{}:{}", s, unsafe {config::RENDEZVOUS_PORT} - 2);
         } else {
             return format!("http://{}", s);
         }
@@ -1065,10 +956,7 @@ pub async fn post_request_sync(url: String, body: String, header: &str) -> Resul
 }
 
 #[inline]
-pub fn make_privacy_mode_msg_with_details(
-    state: back_notification::PrivacyModeState,
-    details: String,
-) -> Message {
+pub fn make_privacy_mode_msg_with_details(state: back_notification::PrivacyModeState, details: String) -> Message {
     let mut misc = Misc::new();
     let mut back_notification = BackNotification {
         details,
@@ -1086,26 +974,31 @@ pub fn make_privacy_mode_msg(state: back_notification::PrivacyModeState) -> Mess
     make_privacy_mode_msg_with_details(state, "".to_owned())
 }
 
-pub fn is_keyboard_mode_supported(keyboard_mode: &KeyboardMode, version_number: i64, peer_platform: &str) -> bool {
+pub fn is_keyboard_mode_supported(keyboard_mode: &KeyboardMode, version_number: i64) -> bool {
     match keyboard_mode {
         KeyboardMode::Legacy => true,
-        KeyboardMode::Map => {
-            if peer_platform.to_lowercase() == crate::PLATFORM_ANDROID.to_lowercase() {
-                false
-            } else {
-                version_number >= hbb_common::get_version_number("1.2.0")
-            }
-        }
+        KeyboardMode::Map => version_number >= hbb_common::get_version_number("1.2.0"),
         KeyboardMode::Translate => version_number >= hbb_common::get_version_number("1.2.0"),
         KeyboardMode::Auto => version_number >= hbb_common::get_version_number("1.2.0"),
     }
 }
 
-pub fn get_supported_keyboard_modes(version: i64, peer_platform: &str) -> Vec<KeyboardMode> {
+pub fn get_supported_keyboard_modes(version: i64) -> Vec<KeyboardMode> {
     KeyboardMode::iter()
-        .filter(|&mode| is_keyboard_mode_supported(mode, version, peer_platform))
+        .filter(|&mode| is_keyboard_mode_supported(mode, version))
         .map(|&mode| mode)
         .collect::<Vec<_>>()
+}
+
+#[cfg(not(target_os = "linux"))]
+lazy_static::lazy_static! {
+    pub static ref IS_X11: bool = false;
+
+}
+
+#[cfg(target_os = "linux")]
+lazy_static::lazy_static! {
+    pub static ref IS_X11: bool = hbb_common::platform::linux::is_x11_or_headless();
 }
 
 pub fn make_fd_to_json(id: i32, path: String, entries: &Vec<FileEntry>) -> String {
@@ -1152,12 +1045,12 @@ pub fn decode64<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>, base64::DecodeError
 }
 
 pub async fn get_key(sync: bool) -> String {
-    #[cfg(windows)]
-    if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
-        if !lic.key.is_empty() {
-            return lic.key;
-        }
-    }
+    // #[cfg(windows)]
+    // if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
+    //     if !lic.key.is_empty() {
+    //         return lic.key;
+    //     }
+    // }
     #[cfg(target_os = "ios")]
     let mut key = Config::get_option("key");
     #[cfg(not(target_os = "ios"))]

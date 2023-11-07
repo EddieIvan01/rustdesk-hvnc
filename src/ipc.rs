@@ -177,7 +177,6 @@ pub enum Data {
         file_transfer_enabled: bool,
         restart: bool,
         recording: bool,
-        block_input: bool,
         from_switch: bool,
     },
     ChatMessage {
@@ -233,7 +232,7 @@ pub enum Data {
     Plugin(Plugin),
     #[cfg(windows)]
     SyncWinCpuUsage(Option<f64>),
-    FileTransferLog((String, String)),
+    FileTransferLog(String),
     #[cfg(windows)]
     ControlledSessionCount(usize),
 }
@@ -320,9 +319,9 @@ impl Drop for CheckIfRestart {
         {
             RendezvousMediator::restart();
         }
-        if self.2 != Config::get_option("audio-input") {
-            crate::audio_service::restart();
-        }
+        // if self.2 != Config::get_option("audio-input") {
+        //     crate::audio_service::restart();
+        // }
     }
 }
 
@@ -504,82 +503,82 @@ pub async fn connect(ms_timeout: u64, postfix: &str) -> ResultType<ConnectionTmp
     Ok(ConnectionTmpl::new(client))
 }
 
-#[cfg(target_os = "linux")]
-#[tokio::main(flavor = "current_thread")]
-pub async fn start_pa() {
-    use crate::audio_service::AUDIO_DATA_SIZE_U8;
+// #[cfg(target_os = "linux")]
+// #[tokio::main(flavor = "current_thread")]
+// pub async fn start_pa() {
+//     use crate::audio_service::AUDIO_DATA_SIZE_U8;
 
-    match new_listener("_pa").await {
-        Ok(mut incoming) => {
-            loop {
-                if let Some(result) = incoming.next().await {
-                    match result {
-                        Ok(stream) => {
-                            let mut stream = Connection::new(stream);
-                            let mut device: String = "".to_owned();
-                            if let Some(Ok(Some(Data::Config((_, Some(x)))))) =
-                                stream.next_timeout2(1000).await
-                            {
-                                device = x;
-                            }
-                            if !device.is_empty() {
-                                device = crate::platform::linux::get_pa_source_name(&device);
-                            }
-                            if device.is_empty() {
-                                device = crate::platform::linux::get_pa_monitor();
-                            }
-                            if device.is_empty() {
-                                continue;
-                            }
-                            let spec = pulse::sample::Spec {
-                                format: pulse::sample::Format::F32le,
-                                channels: 2,
-                                rate: crate::platform::PA_SAMPLE_RATE,
-                            };
-                            log::info!("pa monitor: {:?}", device);
-                            // systemctl --user status pulseaudio.service
-                            let mut buf: Vec<u8> = vec![0; AUDIO_DATA_SIZE_U8];
-                            match psimple::Simple::new(
-                                None,                             // Use the default server
-                                &crate::get_app_name(),           // Our application’s name
-                                pulse::stream::Direction::Record, // We want a record stream
-                                Some(&device),                    // Use the default device
-                                "record",                         // Description of our stream
-                                &spec,                            // Our sample format
-                                None,                             // Use default channel map
-                                None, // Use default buffering attributes
-                            ) {
-                                Ok(s) => loop {
-                                    if let Ok(_) = s.read(&mut buf) {
-                                        let out =
-                                            if buf.iter().filter(|x| **x != 0).next().is_none() {
-                                                vec![]
-                                            } else {
-                                                buf.clone()
-                                            };
-                                        if let Err(err) = stream.send_raw(out.into()).await {
-                                            log::error!("Failed to send audio data:{}", err);
-                                            break;
-                                        }
-                                    }
-                                },
-                                Err(err) => {
-                                    log::error!("Could not create simple pulse: {}", err);
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            log::error!("Couldn't get pa client: {:?}", err);
-                        }
-                    }
-                }
-            }
-        }
-        Err(err) => {
-            log::error!("Failed to start pa ipc server: {}", err);
-        }
-    }
-}
+//     match new_listener("_pa").await {
+//         Ok(mut incoming) => {
+//             loop {
+//                 if let Some(result) = incoming.next().await {
+//                     match result {
+//                         Ok(stream) => {
+//                             let mut stream = Connection::new(stream);
+//                             let mut device: String = "".to_owned();
+//                             if let Some(Ok(Some(Data::Config((_, Some(x)))))) =
+//                                 stream.next_timeout2(1000).await
+//                             {
+//                                 device = x;
+//                             }
+//                             if !device.is_empty() {
+//                                 device = crate::platform::linux::get_pa_source_name(&device);
+//                             }
+//                             if device.is_empty() {
+//                                 device = crate::platform::linux::get_pa_monitor();
+//                             }
+//                             if device.is_empty() {
+//                                 continue;
+//                             }
+//                             let spec = pulse::sample::Spec {
+//                                 format: pulse::sample::Format::F32le,
+//                                 channels: 2,
+//                                 rate: crate::platform::PA_SAMPLE_RATE,
+//                             };
+//                             log::info!("pa monitor: {:?}", device);
+//                             // systemctl --user status pulseaudio.service
+//                             let mut buf: Vec<u8> = vec![0; AUDIO_DATA_SIZE_U8];
+//                             match psimple::Simple::new(
+//                                 None,                             // Use the default server
+//                                 &crate::get_app_name(),           // Our application’s name
+//                                 pulse::stream::Direction::Record, // We want a record stream
+//                                 Some(&device),                    // Use the default device
+//                                 "record",                         // Description of our stream
+//                                 &spec,                            // Our sample format
+//                                 None,                             // Use default channel map
+//                                 None, // Use default buffering attributes
+//                             ) {
+//                                 Ok(s) => loop {
+//                                     if let Ok(_) = s.read(&mut buf) {
+//                                         let out =
+//                                             if buf.iter().filter(|x| **x != 0).next().is_none() {
+//                                                 vec![]
+//                                             } else {
+//                                                 buf.clone()
+//                                             };
+//                                         if let Err(err) = stream.send_raw(out.into()).await {
+//                                             log::error!("Failed to send audio data:{}", err);
+//                                             break;
+//                                         }
+//                                     }
+//                                 },
+//                                 Err(err) => {
+//                                     log::error!("Could not create simple pulse: {}", err);
+//                                 }
+//                             }
+//                         }
+//                         Err(err) => {
+//                             log::error!("Couldn't get pa client: {:?}", err);
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//         Err(err) => {
+//             log::error!("Failed to start pa ipc server: {}", err);
+//         }
+//     }
+// }
 
 #[inline]
 #[cfg(not(windows))]

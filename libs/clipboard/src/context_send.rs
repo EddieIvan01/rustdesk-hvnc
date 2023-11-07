@@ -1,72 +1,68 @@
-use hbb_common::{log, ResultType};
+use crate::cliprdr::*;
+use hbb_common::log;
 use std::sync::Mutex;
-
-use crate::CliprdrServiceContext;
 
 const CLIPBOARD_RESPONSE_WAIT_TIMEOUT_SECS: u32 = 30;
 
 lazy_static::lazy_static! {
-    static ref CONTEXT_SEND: ContextSend = ContextSend{addr: Mutex::new(None)};
+    static ref CONTEXT_SEND: ContextSend = ContextSend{addr: Mutex::new(0)};
 }
 
 pub struct ContextSend {
-    addr: Mutex<Option<Box<dyn CliprdrServiceContext>>>,
+    addr: Mutex<u64>,
 }
 
 impl ContextSend {
     #[inline]
     pub fn is_enabled() -> bool {
-        CONTEXT_SEND.addr.lock().unwrap().is_some()
+        *CONTEXT_SEND.addr.lock().unwrap() != 0
     }
 
     pub fn set_is_stopped() {
-        let _res = Self::proc(|c| c.set_is_stopped().map_err(|e| e.into()));
+        let _res = Self::proc(|c| {
+            c.IsStopped = TRUE;
+            0
+        });
     }
 
     pub fn enable(enabled: bool) {
         let mut lock = CONTEXT_SEND.addr.lock().unwrap();
         if enabled {
-            if lock.is_some() {
-                return;
-            }
-            match crate::create_cliprdr_context(true, false, CLIPBOARD_RESPONSE_WAIT_TIMEOUT_SECS) {
-                Ok(context) => {
-                    log::info!("clipboard context for file transfer created.");
-                    *lock = Some(context)
+            if *lock == 0 {
+                match crate::create_cliprdr_context(
+                    true,
+                    false,
+                    CLIPBOARD_RESPONSE_WAIT_TIMEOUT_SECS,
+                ) {
+                    Ok(context) => {
+                        log::info!("clipboard context for file transfer created.");
+                        *lock = Box::into_raw(context) as _;
+                    }
+                    Err(err) => {
+                        log::error!(
+                            "Create clipboard context for file transfer: {}",
+                            err.to_string()
+                        );
+                    }
                 }
-                Err(err) => {
-                    log::error!(
-                        "create clipboard context for file transfer: {}",
-                        err.to_string()
-                    );
-                }
             }
-        } else if let Some(_clp) = lock.take() {
-            *lock = None;
-            log::info!("clipboard context for file transfer destroyed.");
+        } else {
+            if *lock != 0 {
+                unsafe {
+                    let _ = Box::from_raw(*lock as *mut CliprdrClientContext);
+                }
+                log::info!("clipboard context for file transfer destroyed.");
+                *lock = 0;
+            }
         }
     }
 
-    /// make sure the clipboard context is enabled.
-    pub fn make_sure_enabled() -> ResultType<()> {
-        let mut lock = CONTEXT_SEND.addr.lock().unwrap();
-        if lock.is_some() {
-            return Ok(());
-        }
-
-        let ctx = crate::create_cliprdr_context(true, false, CLIPBOARD_RESPONSE_WAIT_TIMEOUT_SECS)?;
-        *lock = Some(ctx);
-        log::info!("clipboard context for file transfer recreated.");
-        Ok(())
-    }
-
-    pub fn proc<F: FnOnce(&mut Box<dyn CliprdrServiceContext>) -> ResultType<()>>(
-        f: F,
-    ) -> ResultType<()> {
-        let mut lock = CONTEXT_SEND.addr.lock().unwrap();
-        match lock.as_mut() {
-            Some(context) => f(context),
-            None => Ok(()),
+    pub fn proc<F: FnOnce(&mut CliprdrClientContext) -> u32>(f: F) -> u32 {
+        let lock = CONTEXT_SEND.addr.lock().unwrap();
+        if *lock != 0 {
+            unsafe { f(&mut *(*lock as *mut CliprdrClientContext)) }
+        } else {
+            0
         }
     }
 }

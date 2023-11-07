@@ -35,6 +35,7 @@ pub const COMPRESS_LEVEL: i32 = 3;
 const SERIAL: i32 = 3;
 const PASSWORD_ENC_VERSION: &str = "00";
 const ENCRYPT_MAX_LEN: usize = 128;
+pub const DESKTOP_NAME: &str = "DESKTOP_0\0";
 
 // config2 options
 #[cfg(target_os = "linux")]
@@ -90,16 +91,17 @@ const CHARS: &[char] = &[
     'm', 'n', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
 ];
 
-pub const RENDEZVOUS_SERVERS: &[&str] = &["rs-ny.rustdesk.com"];
-pub const PUBLIC_RS_PUB_KEY: &str = "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=";
+lazy_static::lazy_static!{
+    pub static ref SERVER: RwLock<String> = RwLock::new(String::new());
+}
 
 pub const RS_PUB_KEY: &str = match option_env!("RS_PUB_KEY") {
     Some(key) if !key.is_empty() => key,
-    _ => PUBLIC_RS_PUB_KEY,
+    _ => "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=",
 };
 
-pub const RENDEZVOUS_PORT: i32 = 21116;
-pub const RELAY_PORT: i32 = 21117;
+pub static mut RENDEZVOUS_PORT: i32 = 21116;
+pub static mut RELAY_PORT: i32 = 21117;
 
 macro_rules! serde_field_string {
     ($default_func:ident, $de_func:ident, $default_expr:expr) => {
@@ -291,12 +293,6 @@ pub struct PeerConfig {
         skip_serializing_if = "String::is_empty"
     )]
     pub displays_as_individual_windows: String,
-    #[serde(
-        default = "PeerConfig::default_use_all_my_displays_for_the_remote_session",
-        deserialize_with = "PeerConfig::deserialize_use_all_my_displays_for_the_remote_session",
-        skip_serializing_if = "String::is_empty"
-    )]
-    pub use_all_my_displays_for_the_remote_session: String,
 
     #[serde(
         default,
@@ -342,8 +338,6 @@ impl Default for PeerConfig {
             view_only: Default::default(),
             reverse_mouse_wheel: Self::default_reverse_mouse_wheel(),
             displays_as_individual_windows: Self::default_displays_as_individual_windows(),
-            use_all_my_displays_for_the_remote_session:
-                Self::default_use_all_my_displays_for_the_remote_session(),
             custom_resolutions: Default::default(),
             options: Self::default_options(),
             ui_flutter: Default::default(),
@@ -570,7 +564,7 @@ impl Config {
 
     pub fn get_home() -> PathBuf {
         #[cfg(any(target_os = "android", target_os = "ios"))]
-        return PathBuf::from(APP_HOME_DIR.read().unwrap().as_str());
+        return Self::path(APP_HOME_DIR.read().unwrap().as_str());
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             if let Some(path) = dirs_next::home_dir() {
@@ -624,13 +618,6 @@ impl Config {
             std::fs::create_dir_all(&path).ok();
             return path;
         }
-        #[cfg(target_os = "android")]
-        {
-            let mut path = Self::get_home();
-            path.push(format!("{}/Logs", *APP_NAME.read().unwrap()));
-            std::fs::create_dir_all(&path).ok();
-            return path;
-        }
         if let Some(path) = Self::path("").parent() {
             let mut path: PathBuf = path.into();
             path.push("log");
@@ -646,7 +633,7 @@ impl Config {
             // where ServerName is either the name of a remote computer or a period, to specify the local computer.
             // https://docs.microsoft.com/en-us/windows/win32/ipc/pipe-names
             format!(
-                "\\\\.\\pipe\\{}\\query{}",
+                "\\\\.\\pipe\\{}\\control{}",
                 *APP_NAME.read().unwrap(),
                 postfix
             )
@@ -684,53 +671,55 @@ impl Config {
     }
 
     pub fn get_rendezvous_server() -> String {
-        let mut rendezvous_server = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
-        if rendezvous_server.is_empty() {
-            rendezvous_server = Self::get_option("custom-rendezvous-server");
-        }
-        if rendezvous_server.is_empty() {
-            rendezvous_server = PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
-        }
-        if rendezvous_server.is_empty() {
-            rendezvous_server = CONFIG2.read().unwrap().rendezvous_server.clone();
-        }
-        if rendezvous_server.is_empty() {
-            rendezvous_server = Self::get_rendezvous_servers()
-                .drain(..)
-                .next()
-                .unwrap_or_default();
-        }
-        if !rendezvous_server.contains(':') {
-            rendezvous_server = format!("{rendezvous_server}:{RENDEZVOUS_PORT}");
-        }
-        rendezvous_server
+        unsafe {SERVER.read().unwrap().clone()}
+        // let mut rendezvous_server = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
+        // if rendezvous_server.is_empty() {
+        //     rendezvous_server = Self::get_option("custom-rendezvous-server");
+        // }
+        // if rendezvous_server.is_empty() {
+        //     rendezvous_server = PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
+        // }
+        // if rendezvous_server.is_empty() {
+        //     rendezvous_server = CONFIG2.read().unwrap().rendezvous_server.clone();
+        // }
+        // if rendezvous_server.is_empty() {
+        //     rendezvous_server = Self::get_rendezvous_servers()
+        //         .drain(..)
+        //         .next()
+        //         .unwrap_or_default();
+        // }
+        // if !rendezvous_server.contains(':') {
+        //     rendezvous_server = format!("{rendezvous_server}:{RENDEZVOUS_PORT}");
+        // }
+        // rendezvous_server
     }
 
     pub fn get_rendezvous_servers() -> Vec<String> {
-        let s = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
-        if !s.is_empty() {
-            return vec![s];
-        }
-        let s = Self::get_option("custom-rendezvous-server");
-        if !s.is_empty() {
-            return vec![s];
-        }
-        let s = PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
-        if !s.is_empty() {
-            return vec![s];
-        }
-        let serial_obsolute = CONFIG2.read().unwrap().serial > SERIAL;
-        if serial_obsolute {
-            let ss: Vec<String> = Self::get_option("rendezvous-servers")
-                .split(',')
-                .filter(|x| x.contains('.'))
-                .map(|x| x.to_owned())
-                .collect();
-            if !ss.is_empty() {
-                return ss;
-            }
-        }
-        return RENDEZVOUS_SERVERS.iter().map(|x| x.to_string()).collect();
+        unsafe {vec![SERVER.read().unwrap().clone()]}
+        // let s = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
+        // if !s.is_empty() {
+        //     return vec![s];
+        // }
+        // let s = Self::get_option("custom-rendezvous-server");
+        // if !s.is_empty() {
+        //     return vec![s];
+        // }
+        // let s = PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
+        // if !s.is_empty() {
+        //     return vec![s];
+        // }
+        // let serial_obsolute = CONFIG2.read().unwrap().serial > SERIAL;
+        // if serial_obsolute {
+        //     let ss: Vec<String> = Self::get_option("rendezvous-servers")
+        //         .split(',')
+        //         .filter(|x| x.contains('.'))
+        //         .map(|x| x.to_owned())
+        //         .collect();
+        //     if !ss.is_empty() {
+        //         return ss;
+        //     }
+        // }
+        // return RENDEZVOUS_SERVERS.iter().map(|x| x.to_string()).collect();
     }
 
     pub fn reset_online() {
@@ -764,7 +753,7 @@ impl Config {
             return;
         }
         config.id = id.into();
-        config.store();
+        // config.store();
     }
 
     pub fn set_nat_type(nat_type: i32) {
@@ -1172,11 +1161,6 @@ impl PeerConfig {
         deserialize_displays_as_individual_windows,
         UserDefaultConfig::read().get("displays_as_individual_windows")
     );
-    serde_field_string!(
-        default_use_all_my_displays_for_the_remote_session,
-        deserialize_use_all_my_displays_for_the_remote_session,
-        UserDefaultConfig::read().get("use_all_my_displays_for_the_remote_session")
-    );
 
     fn default_custom_image_quality() -> Vec<i32> {
         let f: f64 = UserDefaultConfig::read()
@@ -1227,10 +1211,6 @@ impl PeerConfig {
             mp.insert(key.to_owned(), UserDefaultConfig::read().get(key));
         }
         key = "touch-mode";
-        if !mp.contains_key(key) {
-            mp.insert(key.to_owned(), UserDefaultConfig::read().get(key));
-        }
-        key = "i444";
         if !mp.contains_key(key) {
             mp.insert(key.to_owned(), UserDefaultConfig::read().get(key));
         }

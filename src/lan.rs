@@ -43,7 +43,7 @@ pub(super) fn start_listening() -> ResultType<()> {
                                     mac: get_mac(&self_addr),
                                     id: Config::get_id(),
                                     hostname: whoami::hostname(),
-                                    username: crate::platform::get_active_username(),
+                                    username: crate::username(),
                                     platform: whoami::platform().to_string(),
                                     ..Default::default()
                                 };
@@ -92,7 +92,7 @@ pub fn send_wol(id: String) {
 
 #[inline]
 fn get_broadcast_port() -> u16 {
-    (RENDEZVOUS_PORT + 3) as _
+    (unsafe{RENDEZVOUS_PORT} + 3) as _
 }
 
 fn get_mac(_ip: &IpAddr) -> String {

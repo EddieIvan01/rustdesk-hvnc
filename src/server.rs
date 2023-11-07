@@ -30,7 +30,7 @@ use service::{EmptyExtraFieldService, GenericService, Service, Subscriber};
 
 use crate::ipc::Data;
 
-pub mod audio_service;
+// pub mod audio_service;
 cfg_if::cfg_if! {
 if #[cfg(not(any(target_os = "android", target_os = "ios")))] {
 mod clipboard_service;
@@ -54,8 +54,8 @@ pub const NAME_POS: &'static str = "";
 
 mod connection;
 pub mod display_service;
-#[cfg(windows)]
-pub mod portable_service;
+// #[cfg(windows)]
+// pub mod portable_service;
 mod service;
 mod video_qos;
 pub mod video_service;
@@ -63,8 +63,8 @@ pub mod video_service;
 pub type Childs = Arc<Mutex<Vec<std::process::Child>>>;
 type ConnMap = HashMap<i32, ConnInner>;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-const CONFIG_SYNC_INTERVAL_SECS: f32 = 0.3;
+// #[cfg(any(target_os = "macos", target_os = "linux"))]
+// const CONFIG_SYNC_INTERVAL_SECS: f32 = 0.3;
 
 lazy_static::lazy_static! {
     pub static ref CHILD_PROCESS: Childs = Default::default();
@@ -94,15 +94,15 @@ pub fn new() -> ServerPtr {
         services: HashMap::new(),
         id_count: hbb_common::rand::random::<i32>() % 1000 + 1000, // ensure positive
     };
-    server.add_service(Box::new(audio_service::new()));
-    #[cfg(not(target_os = "ios"))]
+    // server.add_service(Box::new(audio_service::new()));
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     server.add_service(Box::new(display_service::new()));
     server.add_service(Box::new(video_service::new(
         *display_service::PRIMARY_DISPLAY_IDX,
     )));
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        server.add_service(Box::new(clipboard_service::new()));
+        // server.add_service(Box::new(clipboard_service::new()));
         if !display_service::capture_cursor_embedded() {
             server.add_service(Box::new(input_service::new_cursor()));
             server.add_service(Box::new(input_service::new_pos()));
@@ -187,16 +187,16 @@ pub async fn create_tcp_connection(
         }
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        Command::new("/usr/bin/caffeinate")
-            .arg("-u")
-            .arg("-t 5")
-            .spawn()
-            .ok();
-        log::info!("wake up macos");
-    }
+    // #[cfg(target_os = "macos")]
+    // {
+    //     use std::process::Command;
+    //     Command::new("/usr/bin/caffeinate")
+    //         .arg("-u")
+    //         .arg("-t 5")
+    //         .spawn()
+    //         .ok();
+    //     log::info!("wake up macos");
+    // }
     Connection::start(addr, stream, id, Arc::downgrade(&server)).await;
     Ok(())
 }
@@ -241,7 +241,7 @@ async fn create_relay_connection_(
     ipv4: bool,
 ) -> ResultType<()> {
     let mut stream = socket_client::connect_tcp(
-        socket_client::ipv4_to_ipv6(crate::check_port(relay_server, RELAY_PORT), ipv4),
+        socket_client::ipv4_to_ipv6(crate::check_port(relay_server, unsafe{RELAY_PORT}), ipv4),
         CONNECT_TIMEOUT,
     )
     .await?;
@@ -401,27 +401,9 @@ pub fn check_zombie() {
 /// * `is_server` - Whether the current client is definitely the server.
 /// If true, the server will be started.
 /// Otherwise, client will check if there's already a server and start one if not.
-#[cfg(any(target_os = "android", target_os = "ios"))]
-#[tokio::main]
-pub async fn start_server(_is_server: bool) {
-    crate::RendezvousMediator::start_all().await;
-}
-
-/// Start the host server that allows the remote peer to control the current machine.
-///
-/// # Arguments
-///
-/// * `is_server` - Whether the current client is definitely the server.
-/// If true, the server will be started.
-/// Otherwise, client will check if there's already a server and start one if not.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::main]
 pub async fn start_server(is_server: bool) {
-    #[cfg(target_os = "linux")]
-    {
-        log::info!("DISPLAY={:?}", std::env::var("DISPLAY"));
-        log::info!("XAUTHORITY={:?}", std::env::var("XAUTHORITY"));
-    }
     #[cfg(feature = "hwcodec")]
     scrap::hwcodec::check_config_process();
     #[cfg(windows)]
@@ -436,153 +418,153 @@ pub async fn start_server(is_server: bool) {
             }
         });
         input_service::fix_key_down_timeout_loop();
-        #[cfg(target_os = "linux")]
-        if crate::platform::current_is_wayland() {
-            allow_err!(input_service::setup_uinput(0, 1920, 0, 1080).await);
-        }
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        tokio::spawn(async { sync_and_watch_config_dir().await });
-        #[cfg(target_os = "windows")]
-        crate::platform::try_kill_broker();
+        // #[cfg(target_os = "linux")]
+        // if crate::platform::current_is_wayland() {
+        //     allow_err!(input_service::setup_uinput(0, 1920, 0, 1080).await);
+        // }
+        // #[cfg(any(target_os = "macos", target_os = "linux"))]
+        // tokio::spawn(async { sync_and_watch_config_dir().await });
+        // #[cfg(target_os = "windows")]
+        // crate::platform::try_kill_broker();
         crate::RendezvousMediator::start_all().await;
     } else {
-        match crate::ipc::connect(1000, "").await {
-            Ok(mut conn) => {
-                if conn.send(&Data::SyncConfig(None)).await.is_ok() {
-                    if let Ok(Some(data)) = conn.next_timeout(1000).await {
-                        match data {
-                            Data::SyncConfig(Some(configs)) => {
-                                let (config, config2) = *configs;
-                                if Config::set(config) {
-                                    log::info!("config synced");
-                                }
-                                if Config2::set(config2) {
-                                    log::info!("config2 synced");
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            Err(err) => {
-                log::info!("server not started (will try to start): {}", err);
-                std::thread::spawn(|| start_server(true));
-            }
-        }
+        // match crate::ipc::connect(1000, "").await {
+        //     Ok(mut conn) => {
+        //         if conn.send(&Data::SyncConfig(None)).await.is_ok() {
+        //             if let Ok(Some(data)) = conn.next_timeout(1000).await {
+        //                 match data {
+        //                     Data::SyncConfig(Some(configs)) => {
+        //                         let (config, config2) = *configs;
+        //                         if Config::set(config) {
+        //                             log::info!("config synced");
+        //                         }
+        //                         if Config2::set(config2) {
+        //                             log::info!("config2 synced");
+        //                         }
+        //                     }
+        //                     _ => {}
+        //                 }
+        //             }
+        //         }
+        //     }
+        //     Err(err) => {
+        //         log::info!("server not started (will try to start): {}", err);
+        //         std::thread::spawn(|| start_server(true));
+        //     }
+        // }
     }
 }
 
-#[cfg(target_os = "macos")]
-#[tokio::main(flavor = "current_thread")]
-pub async fn start_ipc_url_server() {
-    log::debug!("Start an ipc server for listening to url schemes");
-    match crate::ipc::new_listener("_url").await {
-        Ok(mut incoming) => {
-            while let Some(Ok(conn)) = incoming.next().await {
-                let mut conn = crate::ipc::Connection::new(conn);
-                match conn.next_timeout(1000).await {
-                    Ok(Some(data)) => match data {
-                        #[cfg(feature = "flutter")]
-                        Data::UrlLink(url) => {
-                            let mut m = HashMap::new();
-                            m.insert("name", "on_url_scheme_received");
-                            m.insert("url", url.as_str());
-                            let event = serde_json::to_string(&m).unwrap_or("".to_owned());
-                            match crate::flutter::push_global_event(
-                                crate::flutter::APP_TYPE_MAIN,
-                                event,
-                            ) {
-                                None => log::warn!("No main window app found!"),
-                                Some(..) => {}
-                            }
-                        }
-                        _ => {
-                            log::warn!("An unexpected data was sent to the ipc url server.")
-                        }
-                    },
-                    Err(err) => {
-                        log::error!("{}", err);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Err(err) => {
-            log::error!("{}", err);
-        }
-    }
-}
+// #[cfg(target_os = "macos")]
+// #[tokio::main(flavor = "current_thread")]
+// pub async fn start_ipc_url_server() {
+//     log::debug!("Start an ipc server for listening to url schemes");
+//     match crate::ipc::new_listener("_url").await {
+//         Ok(mut incoming) => {
+//             while let Some(Ok(conn)) = incoming.next().await {
+//                 let mut conn = crate::ipc::Connection::new(conn);
+//                 match conn.next_timeout(1000).await {
+//                     Ok(Some(data)) => match data {
+//                         #[cfg(feature = "flutter")]
+//                         Data::UrlLink(url) => {
+//                             let mut m = HashMap::new();
+//                             m.insert("name", "on_url_scheme_received");
+//                             m.insert("url", url.as_str());
+//                             let event = serde_json::to_string(&m).unwrap_or("".to_owned());
+//                             match crate::flutter::push_global_event(
+//                                 crate::flutter::APP_TYPE_MAIN,
+//                                 event,
+//                             ) {
+//                                 None => log::warn!("No main window app found!"),
+//                                 Some(..) => {}
+//                             }
+//                         }
+//                         _ => {
+//                             log::warn!("An unexpected data was sent to the ipc url server.")
+//                         }
+//                     },
+//                     Err(err) => {
+//                         log::error!("{}", err);
+//                     }
+//                     _ => {}
+//                 }
+//             }
+//         }
+//         Err(err) => {
+//             log::error!("{}", err);
+//         }
+//     }
+// }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-async fn sync_and_watch_config_dir() {
-    if crate::platform::is_root() {
-        return;
-    }
+// #[cfg(any(target_os = "macos", target_os = "linux"))]
+// async fn sync_and_watch_config_dir() {
+//     if crate::platform::is_root() {
+//         return;
+//     }
 
-    let mut cfg0 = (Config::get(), Config2::get());
-    let mut synced = false;
-    let tries =
-        if std::env::args().len() == 2 && std::env::args().nth(1) == Some("--server".to_owned()) {
-            30
-        } else {
-            3
-        };
-    log::debug!("#tries of ipc service connection: {}", tries);
-    use hbb_common::sleep;
-    for i in 1..=tries {
-        sleep(i as f32 * CONFIG_SYNC_INTERVAL_SECS).await;
-        match crate::ipc::connect(1000, "_service").await {
-            Ok(mut conn) => {
-                if !synced {
-                    if conn.send(&Data::SyncConfig(None)).await.is_ok() {
-                        if let Ok(Some(data)) = conn.next_timeout(1000).await {
-                            match data {
-                                Data::SyncConfig(Some(configs)) => {
-                                    let (config, config2) = *configs;
-                                    let _chk = crate::ipc::CheckIfRestart::new();
-                                    if !config.is_empty() {
-                                        if cfg0.0 != config {
-                                            cfg0.0 = config.clone();
-                                            Config::set(config);
-                                            log::info!("sync config from root");
-                                        }
-                                        if cfg0.1 != config2 {
-                                            cfg0.1 = config2.clone();
-                                            Config2::set(config2);
-                                            log::info!("sync config2 from root");
-                                        }
-                                    }
-                                    synced = true;
-                                }
-                                _ => {}
-                            };
-                        };
-                    }
-                }
+//     let mut cfg0 = (Config::get(), Config2::get());
+//     let mut synced = false;
+//     let tries =
+//         if std::env::args().len() == 2 && std::env::args().nth(1) == Some("--server".to_owned()) {
+//             30
+//         } else {
+//             3
+//         };
+//     log::debug!("#tries of ipc service connection: {}", tries);
+//     use hbb_common::sleep;
+//     for i in 1..=tries {
+//         sleep(i as f32 * CONFIG_SYNC_INTERVAL_SECS).await;
+//         match crate::ipc::connect(1000, "_service").await {
+//             Ok(mut conn) => {
+//                 if !synced {
+//                     if conn.send(&Data::SyncConfig(None)).await.is_ok() {
+//                         if let Ok(Some(data)) = conn.next_timeout(1000).await {
+//                             match data {
+//                                 Data::SyncConfig(Some(configs)) => {
+//                                     let (config, config2) = *configs;
+//                                     let _chk = crate::ipc::CheckIfRestart::new();
+//                                     if !config.is_empty() {
+//                                         if cfg0.0 != config {
+//                                             cfg0.0 = config.clone();
+//                                             Config::set(config);
+//                                             log::info!("sync config from root");
+//                                         }
+//                                         if cfg0.1 != config2 {
+//                                             cfg0.1 = config2.clone();
+//                                             Config2::set(config2);
+//                                             log::info!("sync config2 from root");
+//                                         }
+//                                     }
+//                                     synced = true;
+//                                 }
+//                                 _ => {}
+//                             };
+//                         };
+//                     }
+//                 }
 
-                loop {
-                    sleep(CONFIG_SYNC_INTERVAL_SECS).await;
-                    let cfg = (Config::get(), Config2::get());
-                    if cfg != cfg0 {
-                        log::info!("config updated, sync to root");
-                        match conn.send(&Data::SyncConfig(Some(cfg.clone().into()))).await {
-                            Err(e) => {
-                                log::error!("sync config to root failed: {}", e);
-                                break;
-                            }
-                            _ => {
-                                cfg0 = cfg;
-                                conn.next_timeout(1000).await.ok();
-                            }
-                        }
-                    }
-                }
-            }
-            Err(_) => {
-                log::info!("#{} try: failed to connect to ipc_service", i);
-            }
-        }
-    }
-    log::warn!("skipped config sync");
-}
+//                 loop {
+//                     sleep(CONFIG_SYNC_INTERVAL_SECS).await;
+//                     let cfg = (Config::get(), Config2::get());
+//                     if cfg != cfg0 {
+//                         log::info!("config updated, sync to root");
+//                         match conn.send(&Data::SyncConfig(Some(cfg.clone().into()))).await {
+//                             Err(e) => {
+//                                 log::error!("sync config to root failed: {}", e);
+//                                 break;
+//                             }
+//                             _ => {
+//                                 cfg0 = cfg;
+//                                 conn.next_timeout(1000).await.ok();
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
+//             Err(_) => {
+//                 log::info!("#{} try: failed to connect to ipc_service", i);
+//             }
+//         }
+//     }
+//     log::warn!("skipped config sync");
+// }
